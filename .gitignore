@@ -1,0 +1,32 @@
+# Archived specs and planning docs (kept locally, not versioned)
+archive/
+docs/
+
+# OS / editor
+.DS_Store
+*.swp
+.idea/
+.vscode/
+
+# Go
+/bin/
+*.test
+*.out
+coverage.*
+
+# Flutter / Dart
+.dart_tool/
+build/
+.flutter-plugins
+.flutter-plugins-dependencies
+
+# Secrets / local env
+.env
+.env.*
+*.pem
+*.key
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
