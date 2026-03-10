@@ -343,8 +343,7 @@ volumes:
 | `PRW_LISTEN_ADDR` | `:8080` | API listener inside the container |
 | `PRW_METRICS_ADDR` | `:9090` | Prometheus listener |
 | `PRW_DATABASE_URL_FILE` | `/run/secrets/database_url` | DSN for the `prw_app` role |
-| `PRW_OIDC_ISSUER` | `https://accounts.google.com` | Google OIDC issuer (the only identity provider) |
-| `PRW_OIDC_CLIENT_ID` | `<android/ios client ids, comma-separated>` | Accepted `aud` values for Google ID tokens |
+| `PRW_GOOGLE_CLIENT_IDS` | `<android-client-id>,<ios-client-id>` | Accepted `aud` values for Google ID tokens (issuer fixed to `https://accounts.google.com`) |
 | `PRW_ALLOWED_SUBJECTS` | `<google sub>` | Allowlist of Google `sub` values; everyone else is denied |
 | `PRW_ACCESS_SIGNING_KEY_FILE` | `/run/secrets/access_signing_key` | Ed25519 key for access tokens |
 | `PRW_TICKET_SIGNING_KEY_FILE` | `/run/secrets/ticket_signing_key` | Ed25519 key for connection tickets, grant leases and relay tokens |
