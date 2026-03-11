@@ -119,7 +119,7 @@ sequenceDiagram
   H->>S: wait for approval
   P->>S: resolve ref or code (signed in)
   S-->>P: hostname, OS, fingerprint, expiry
-  P->>P: QR fingerprint must equal server fingerprint; user confirms
+  P->>P: QR fingerprint must equal server fingerprint, user confirms
   P->>S: approve
   S-->>H: approved (nonce)
   H->>S: complete (signature with device key over nonce)
@@ -206,7 +206,7 @@ sequenceDiagram
   S-->>U: revoked
   Note over S: new tickets and refreshes for L are refused immediately
   O->>H: revoke_notice (control socket)
-  H->>H: drop from lease; close L's connections within 30 s
+  H->>H: drop from lease, close L's connections within 30 s
   Note over H: tmux sessions are detached, not killed
   H-->>O: ack
   alt host offline or push lost
