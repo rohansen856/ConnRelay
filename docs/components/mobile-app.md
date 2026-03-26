@@ -127,7 +127,7 @@ sequenceDiagram
   App->>API: POST /v1/auth/challenge → nonce
   App->>G: AppAuth authorize (PKCE, OIDC nonce)
   G-->>App: id_token
-  App->>App: DeviceKeyService.ensureKey(); sign JCS {purpose:"prw.auth.v1", nonce, spki_fp, iat}
+  App->>App: DeviceKeyService.ensureKey(), then sign JCS payload (purpose prw.auth.v1, nonce, spki_fp, iat)
   App->>API: POST /v1/auth/exchange
   API-->>App: access (memory), refresh (secure storage), device_id
 ```
