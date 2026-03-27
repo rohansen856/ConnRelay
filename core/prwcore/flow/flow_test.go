@@ -29,6 +29,16 @@ func TestSenderPartialAcquire(t *testing.T) {
 	}
 }
 
+func TestSenderReturn(t *testing.T) {
+	s := NewSender(10)
+	_ = s.Grant(10)
+	n, _ := s.Acquire(context.Background(), 10)
+	s.Return(n - 3)
+	if s.Available() != 7 {
+		t.Fatalf("available %d", s.Available())
+	}
+}
+
 func TestSenderWakesOnGrant(t *testing.T) {
 	s := NewSender(0)
 	done := make(chan int)

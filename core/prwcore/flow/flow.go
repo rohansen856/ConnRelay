@@ -83,6 +83,19 @@ func (s *Sender) Acquire(ctx context.Context, want int) (int, error) {
 	}
 }
 
+// Return gives back credit that was acquired but not used (for example when
+// a PTY read returned fewer bytes than reserved).
+func (s *Sender) Return(n int) {
+	if n <= 0 {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.credit += int64(n)
+	close(s.wake)
+	s.wake = make(chan struct{})
+}
+
 // Available returns the current credit.
 func (s *Sender) Available() int64 {
 	s.mu.Lock()
