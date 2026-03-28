@@ -4,4 +4,5 @@ use (
 	./agents/host
 	./core/prwcore
 	./services/control
+	./tests
 )
