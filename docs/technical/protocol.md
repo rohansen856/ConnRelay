@@ -238,7 +238,8 @@ t=0    POST /v1/connections → attempt
        if hint[network_id] == UDP_BLOCKED: start WSS relay now
 t=4s   if ICE not connected: start WSS relay (if not started)
 each transport on ready → run identity attestation (§10)
-first transport to finish attestation → winner; close the others
+first transport to finish attestation (phone side) → winner; phone sends path.select on it, closes the others
+host: commits to the transport on which path.select arrives (the phone is the controlling side)
 t=20s  no winner → fail connect_timeout (diagnostics: ice_state, turn_alloc, wss_state)
 winner == wss and ICE gathered no srflx/relay candidates → hint[network_id] = UDP_BLOCKED (24 h)
 winner == direct or turn → clear hint
@@ -332,6 +333,7 @@ Envelope: `{"v":1,"type":"…","request_id":"<uuidv7>","terminal_session_id"?:�
 | `hello` | both, first | `{pv_min, pv_max, impl, features}` | The selected version is `min(max_a, max_b)`, which must be ≥ each side's `pv_min`. Otherwise `unsupported_version` is returned and the transport closes. |
 | `peer.attest` | both | `{jws, ticket?}` | §10 |
 | `peer.identity_verified` | both | `{}` | Gate for terminal traffic |
+| `path.select` | P → H | `{}` | Sent by the phone on the transport it chose. The host commits to the transport that carries it and closes the others. |
 | `terminal.list` | P → H | `{}` | Reply: `terminal.list.result {sessions:[{id,title,status,persistent,created_at,last_attached_at,attached_clients}]}` |
 | `terminal.open` | P → H | `{title?, cols, rows, profile:"default"}` | `request_id` acts as the idempotency key. The host deduplicates for 10 min. |
 | `terminal.attach` | P → H | `{terminal_session_id, cols, rows}` | |
