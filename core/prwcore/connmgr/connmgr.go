@@ -45,19 +45,20 @@ type Options struct {
 	Controlled bool
 }
 
-// Attempt records how one path fared.
+// Attempt records how one path fared. Times are milliseconds since the
+// race started.
 type Attempt struct {
-	Name    string        `json:"name"` // "ice" or "wss"
-	Started time.Duration `json:"started_ms"`
-	Elapsed time.Duration `json:"elapsed_ms"`
-	Err     string        `json:"error,omitempty"`
+	Name      string `json:"name"` // "ice" or "wss"
+	StartedMS int64  `json:"started_ms"`
+	ElapsedMS int64  `json:"elapsed_ms"`
+	Err       string `json:"error,omitempty"`
 }
 
 // Report summarises a race for diagnostics.
 type Report struct {
-	Path     string        `json:"path"` // direct, turn, wss_relay
-	Elapsed  time.Duration `json:"elapsed_ms"`
-	Attempts []Attempt     `json:"attempts"`
+	Path      string    `json:"path"` // direct, turn, wss_relay
+	ElapsedMS int64     `json:"elapsed_ms"`
+	Attempts  []Attempt `json:"attempts"`
 }
 
 type result struct {
@@ -85,7 +86,8 @@ func Connect(ctx context.Context, o Options) (transport.Conn, *Report, error) {
 	results := make(chan result, 2)
 	launch := func(name string, d Dialer) {
 		go func() {
-			at := Attempt{Name: name, Started: time.Since(start)}
+			began := time.Since(start)
+			at := Attempt{Name: name, StartedMS: began.Milliseconds()}
 			c, err := d(ctx)
 			if err == nil && o.Handshake != nil {
 				err = o.Handshake(ctx, c)
@@ -97,7 +99,7 @@ func Connect(ctx context.Context, o Options) (transport.Conn, *Report, error) {
 				c.Close()
 				c = nil
 			}
-			at.Elapsed = time.Since(start) - at.Started
+			at.ElapsedMS = (time.Since(start) - began).Milliseconds()
 			if err != nil {
 				at.Err = err.Error()
 			}
@@ -137,7 +139,7 @@ func Connect(ctx context.Context, o Options) (transport.Conn, *Report, error) {
 	}
 	for {
 		if pending == 0 && (wssStarted || o.WSS == nil) {
-			rep.Elapsed = time.Since(start)
+			rep.ElapsedMS = time.Since(start).Milliseconds()
 			if lastErr == nil {
 				lastErr = ErrTimeout
 			}
@@ -165,11 +167,11 @@ func Connect(ctx context.Context, o Options) (transport.Conn, *Report, error) {
 			cancel() // stop the losing path
 			drain(pending)
 			rep.Path = r.conn.Path()
-			rep.Elapsed = time.Since(start)
+			rep.ElapsedMS = time.Since(start).Milliseconds()
 			return r.conn, rep, nil
 		case <-ctx.Done():
 			drain(pending)
-			rep.Elapsed = time.Since(start)
+			rep.ElapsedMS = time.Since(start).Milliseconds()
 			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 				return nil, rep, fmt.Errorf("%w (last error: %v)", ErrTimeout, lastErr)
 			}
