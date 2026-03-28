@@ -19,6 +19,7 @@ const (
 	TypeHello            = "hello"
 	TypePeerAttest       = "peer.attest"
 	TypeIdentityVerified = "peer.identity_verified"
+	TypePathSelect       = "path.select"
 	TypeTerminalList     = "terminal.list"
 	TypeTerminalListRes  = "terminal.list.result"
 	TypeTerminalOpen     = "terminal.open"

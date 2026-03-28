@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/rohansen856/connrelay/core/prwcore/control"
 	"github.com/rohansen856/connrelay/core/prwcore/transport"
 )
 
@@ -36,6 +37,12 @@ type Options struct {
 	UDPBlocked bool
 	// Handshake runs hello + attestation on a fresh transport.
 	Handshake func(ctx context.Context, c transport.Conn) error
+	// Controlled is set on the host. The phone (controlling side) chooses
+	// the path and announces it with path.select on the winning transport;
+	// the controlled side commits to whichever transport carries it. This
+	// prevents the two ends from picking different winners when both paths
+	// complete at nearly the same time.
+	Controlled bool
 }
 
 // Attempt records how one path fared.
@@ -81,10 +88,14 @@ func Connect(ctx context.Context, o Options) (transport.Conn, *Report, error) {
 			at := Attempt{Name: name, Started: time.Since(start)}
 			c, err := d(ctx)
 			if err == nil && o.Handshake != nil {
-				if err = o.Handshake(ctx, c); err != nil {
-					c.Close()
-					c = nil
-				}
+				err = o.Handshake(ctx, c)
+			}
+			if err == nil && o.Controlled {
+				err = awaitSelect(ctx, c)
+			}
+			if err != nil && c != nil {
+				c.Close()
+				c = nil
 			}
 			at.Elapsed = time.Since(start) - at.Started
 			if err != nil {
@@ -143,6 +154,14 @@ func Connect(ctx context.Context, o Options) (transport.Conn, *Report, error) {
 				startWSS() // a failed ICE attempt triggers the fallback at once
 				continue
 			}
+			if !o.Controlled {
+				if err := sendSelect(r.conn); err != nil {
+					r.conn.Close()
+					lastErr = err
+					startWSS()
+					continue
+				}
+			}
 			cancel() // stop the losing path
 			drain(pending)
 			rep.Path = r.conn.Path()
@@ -156,5 +175,47 @@ func Connect(ctx context.Context, o Options) (transport.Conn, *Report, error) {
 			}
 			return nil, rep, ctx.Err()
 		}
+	}
+}
+
+// sendSelect tells the controlled side which transport won.
+func sendSelect(c transport.Conn) error {
+	env, err := control.New(control.TypePathSelect, nil)
+	if err != nil {
+		return err
+	}
+	f, err := env.Frame()
+	if err != nil {
+		return err
+	}
+	return c.Send(f)
+}
+
+// awaitSelect waits for path.select as the first message after the handshake.
+func awaitSelect(ctx context.Context, c transport.Conn) error {
+	got := make(chan error, 1)
+	go func() {
+		f, err := c.Recv()
+		if err != nil {
+			got <- err
+			return
+		}
+		env, err := control.Decode(f)
+		if err != nil {
+			got <- err
+			return
+		}
+		if env.Type != control.TypePathSelect {
+			got <- fmt.Errorf("connmgr: expected %s, got %s", control.TypePathSelect, env.Type)
+			return
+		}
+		got <- nil
+	}()
+	select {
+	case err := <-got:
+		return err
+	case <-ctx.Done():
+		c.Close() // unblocks Recv
+		return ctx.Err()
 	}
 }

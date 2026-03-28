@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rohansen856/connrelay/core/prwcore/frame"
 	"github.com/rohansen856/connrelay/core/prwcore/transport"
 )
 
@@ -16,8 +17,9 @@ type fakeConn struct {
 	closed *atomic.Int32
 }
 
-func (f fakeConn) Path() string { return f.path }
-func (f fakeConn) Close() error { f.closed.Add(1); return nil }
+func (f fakeConn) Path() string            { return f.path }
+func (f fakeConn) Close() error            { f.closed.Add(1); return nil }
+func (f fakeConn) Send(*frame.Frame) error { return nil }
 
 func dialer(path string, after time.Duration, err error, closed *atomic.Int32, started *atomic.Int64, t0 time.Time) Dialer {
 	return func(ctx context.Context) (transport.Conn, error) {
@@ -158,5 +160,48 @@ func TestLoserClosed(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 	if closed.Load() != 1 {
 		t.Fatalf("loser closed %d times (winner %s)", closed.Load(), c.Path())
+	}
+}
+
+// TestBothSidesAgree races two real transports between a controlling phone
+// and a controlled host many times, with handshakes completing at nearly the
+// same moment, and checks both ends always pick the same transport.
+func TestBothSidesAgree(t *testing.T) {
+	for i := 0; i < 50; i++ {
+		iceP, iceH := transport.Pipe("a", "b", "b", "a")
+		wssP, wssH := transport.Pipe("c", "d", "d", "c")
+		label := map[transport.Conn]string{iceP: "ice", iceH: "ice", wssP: "wss", wssH: "wss"}
+		immediate := func(c transport.Conn) Dialer {
+			return func(context.Context) (transport.Conn, error) { return c, nil }
+		}
+		jitter := func(ctx context.Context, c transport.Conn) error {
+			time.Sleep(time.Duration(i%3) * time.Millisecond)
+			return nil
+		}
+		type out struct {
+			c   transport.Conn
+			err error
+		}
+		hostCh := make(chan out, 1)
+		go func() {
+			c, _, err := Connect(context.Background(), Options{
+				ICE: immediate(iceH), WSS: immediate(wssH), UDPBlocked: true,
+				Handshake: jitter, Controlled: true, Timeout: 2 * time.Second,
+			})
+			hostCh <- out{c, err}
+		}()
+		pc, _, perr := Connect(context.Background(), Options{
+			ICE: immediate(iceP), WSS: immediate(wssP), UDPBlocked: true,
+			Handshake: jitter, Timeout: 2 * time.Second,
+		})
+		h := <-hostCh
+		if perr != nil || h.err != nil {
+			t.Fatalf("run %d: phone %v host %v", i, perr, h.err)
+		}
+		if label[pc] != label[h.c] {
+			t.Fatalf("run %d: phone chose %s, host chose %s", i, label[pc], label[h.c])
+		}
+		pc.Close()
+		h.c.Close()
 	}
 }
