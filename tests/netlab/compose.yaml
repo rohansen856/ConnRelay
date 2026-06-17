@@ -1,0 +1,93 @@
+# PRW network lab. Two private LANs behind Linux NAT routers share a "WAN"
+# with the control-plane stand-in (10.99.0.10:443, "EIP-A"), coturn
+# (10.99.0.20, "EIP-B", TURN on 3478 and TURN-TLS on 443) and an HTTPS-only
+# CONNECT proxy. Run via ./run.sh.
+name: prw-netlab
+
+x-node: &node
+  image: prw-netlab-node:latest
+  build: { context: ., dockerfile: Dockerfile.node }
+  cap_add: [NET_ADMIN]
+  volumes:
+    - ./config:/lab/config:ro
+    - ./.lab/bin:/lab/bin:ro
+    - ./.lab/certs:/lab/certs:ro
+  extra_hosts:
+    - "api.lab.invalid:10.99.0.10"
+    - "turn.lab.invalid:10.99.0.20"
+    - "proxy.lab.invalid:10.99.0.30"
+  environment:
+    SSL_CERT_FILE: /lab/certs/ca.crt
+
+networks:
+  wan:   { ipam: { config: [{ subnet: 10.99.0.0/24 }] } }
+  lan-p: { ipam: { config: [{ subnet: 10.98.1.0/24 }] } }
+  lan-h: { ipam: { config: [{ subnet: 10.98.2.0/24 }] } }
+
+services:
+  api:
+    <<: *node
+    command: >-
+      /lab/bin/prw-labserver -addr 10.99.0.10:443 -public-url https://api.lab.invalid
+      -tls-cert /lab/certs/api.crt -tls-key /lab/certs/api.key
+      -stun-urls stun:turn.lab.invalid:3478
+      -turn-urls turn:turn.lab.invalid:3478?transport=udp,turn:turn.lab.invalid:3478?transport=tcp,turns:turn.lab.invalid:443?transport=tcp
+    environment:
+      PRW_TURN_SHARED_SECRET: TEST-ONLY-netlab-turn-secret
+    networks: { wan: { ipv4_address: 10.99.0.10 } }
+
+  turn:
+    image: coturn/coturn:4.18.0
+    command: ["-c", "/etc/coturn/turnserver.conf"]
+    sysctls: { net.ipv4.ip_unprivileged_port_start: "0" }
+    volumes:
+      - ./config/turnserver.conf:/etc/coturn/turnserver.conf:ro
+      - ./.lab/certs:/lab/certs:ro
+    networks: { wan: { ipv4_address: 10.99.0.20 } }
+
+  proxy:
+    image: ubuntu/squid:latest
+    volumes: [./config/squid.conf:/etc/squid/squid.conf:ro]
+    extra_hosts: ["api.lab.invalid:10.99.0.10"]
+    networks: { wan: { ipv4_address: 10.99.0.30 } }
+
+  router-p:
+    <<: *node
+    command: /lab/config/router-init.sh
+    sysctls: { net.ipv4.ip_forward: "1" }
+    networks:
+      wan:   { ipv4_address: 10.99.0.2 }
+      lan-p: { ipv4_address: 10.98.1.254 }
+
+  router-h:
+    <<: *node
+    command: /lab/config/router-init.sh
+    sysctls: { net.ipv4.ip_forward: "1" }
+    networks:
+      wan:   { ipv4_address: 10.99.0.3 }
+      lan-h: { ipv4_address: 10.98.2.254 }
+
+  phone:
+    <<: *node
+    command: /lab/config/peer-init.sh
+    environment: { ROUTER: 10.98.1.254, SSL_CERT_FILE: /lab/certs/ca.crt }
+    networks: { lan-p: { ipv4_address: 10.98.1.10 } }
+
+  host:
+    <<: *node
+    command: /lab/config/peer-init.sh
+    environment: { ROUTER: 10.98.2.254, SSL_CERT_FILE: /lab/certs/ca.crt }
+    networks: { lan-h: { ipv4_address: 10.98.2.10 } }
+
+  # Phone on the same LAN as the host (home Wi-Fi case).
+  phone-lan:
+    <<: *node
+    command: /lab/config/peer-init.sh
+    environment: { ROUTER: 10.98.2.254, SSL_CERT_FILE: /lab/certs/ca.crt }
+    networks: { lan-h: { ipv4_address: 10.98.2.20 } }
+
+  # Host with a public address (VPS, or a router with a forwarded port).
+  host-pub:
+    <<: *node
+    command: sleep infinity
+    networks: { wan: { ipv4_address: 10.99.0.50 } }

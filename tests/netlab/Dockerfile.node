@@ -1,0 +1,3 @@
+# Network-lab node: peers and NAT routers. Binaries are mounted at runtime.
+FROM alpine:3.20
+RUN apk add --no-cache iptables iproute2 conntrack-tools ca-certificates bash
