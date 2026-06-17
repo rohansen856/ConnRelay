@@ -65,7 +65,7 @@ type lab struct {
 	publicURL  string
 
 	mu         sync.Mutex
-	waiting    chan Bundle // host bundles waiting for the host to pick up
+	waiting    map[string]chan Bundle // lab id -> host bundles waiting for pickup
 	signals    map[string]map[string]*websocket.Conn
 	pendingSig map[string][][]byte // messages for a role not yet connected
 }
@@ -119,7 +119,7 @@ func (l *lab) attempt(w http.ResponseWriter, r *http.Request) {
 	}
 	phone, host := l.newAttempt()
 	select {
-	case l.waiting <- host:
+	case l.queue(r.URL.Query().Get("id")) <- host:
 	default:
 		http.Error(w, "host queue full", http.StatusServiceUnavailable)
 		return
@@ -130,12 +130,23 @@ func (l *lab) attempt(w http.ResponseWriter, r *http.Request) {
 // GET /lab/next (host): long-polls for the next attempt.
 func (l *lab) next(w http.ResponseWriter, r *http.Request) {
 	select {
-	case b := <-l.waiting:
+	case b := <-l.queue(r.URL.Query().Get("id")):
 		json.NewEncoder(w).Encode(b)
 	case <-time.After(60 * time.Second):
 		w.WriteHeader(http.StatusNoContent)
 	case <-r.Context().Done():
 	}
+}
+
+func (l *lab) queue(id string) chan Bundle {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	q, ok := l.waiting[id]
+	if !ok {
+		q = make(chan Bundle, 4)
+		l.waiting[id] = q
+	}
+	return q
 }
 
 // /lab/signal?attempt=..&role=phone|host forwards text messages to the other role.
@@ -241,7 +252,7 @@ func main() {
 	l := &lab{
 		issuer: token.Issuer{KID: "lab-1", Key: priv}, pub: pub, turnSecret: []byte(secret),
 		turnURLs: split(*turnURLs), stunURLs: split(*stunURLs), publicURL: strings.TrimRight(*public, "/"),
-		waiting: make(chan Bundle, 16), signals: map[string]map[string]*websocket.Conn{}, pendingSig: map[string][][]byte{},
+		waiting: map[string]chan Bundle{}, signals: map[string]map[string]*websocket.Conn{}, pendingSig: map[string][][]byte{},
 	}
 	rs := relay.New(relay.DefaultConfig(), token.KeySet{"lab-1": pub}, log)
 	mux := http.NewServeMux()
