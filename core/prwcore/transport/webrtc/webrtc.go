@@ -281,13 +281,15 @@ func (p *Peer) newConn() (*conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	path := transport.PathDirect
-	if pair, err := dtls.ICETransport().GetSelectedCandidatePair(); err == nil && pair != nil &&
-		(pair.Local.Typ == webrtc.ICECandidateTypeRelay || pair.Remote.Typ == webrtc.ICECandidateTypeRelay) {
-		path = transport.PathTURN
+	path, pairDesc := transport.PathDirect, ""
+	if pair, err := dtls.ICETransport().GetSelectedCandidatePair(); err == nil && pair != nil {
+		if pair.Local.Typ == webrtc.ICECandidateTypeRelay || pair.Remote.Typ == webrtc.ICECandidateTypeRelay {
+			path = transport.PathTURN
+		}
+		pairDesc = pair.Local.Typ.String() + "/" + pair.Local.Protocol.String() + " -> " + pair.Remote.Typ.String() + "/" + pair.Remote.Protocol.String()
 	}
 	c := &conn{
-		p: p, ctlRW: ctlRW, termRW: termRW, path: path,
+		p: p, ctlRW: ctlRW, termRW: termRW, path: path, pair: pairDesc,
 		localFP: localFP, remoteFP: attest.Fingerprint(remoteDER),
 		in: make(chan *frame.Frame, 64), errc: make(chan error, 2), done: make(chan struct{}),
 		low: map[*webrtc.DataChannel]chan struct{}{p.ctl: make(chan struct{}, 1), p.term: make(chan struct{}, 1)},
@@ -323,6 +325,7 @@ type conn struct {
 	p             *Peer
 	ctlRW, termRW io.ReadWriteCloser
 	path          string
+	pair          string
 	localFP       string
 	remoteFP      string
 	wmu           sync.Mutex
@@ -389,7 +392,11 @@ func (c *conn) Recv() (*frame.Frame, error) {
 	}
 }
 
-func (c *conn) Transport() string    { return attest.TransportDTLS }
+func (c *conn) Transport() string { return attest.TransportDTLS }
+
+// SelectedPair describes the nominated ICE candidate pair, e.g.
+// "srflx/udp -> srflx/udp", for diagnostics.
+func (c *conn) SelectedPair() string { return c.pair }
 func (c *conn) Path() string         { return c.path }
 func (c *conn) LocalCertFP() string  { return c.localFP }
 func (c *conn) RemoteCertFP() string { return c.remoteFP }
