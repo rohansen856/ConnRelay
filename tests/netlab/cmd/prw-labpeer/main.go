@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -88,6 +89,7 @@ func main() {
 	fallback := flag.Duration("fallback", connmgr.DefaultFallbackDelay, "WSS fallback delay")
 	udpBlocked := flag.Bool("udp-blocked", false, "start WSS immediately (cached hint)")
 	loops := flag.Int("loops", 1, "host: number of attempts to serve")
+	labID := flag.String("lab-id", "default", "pairs one phone run with one host run")
 	flag.Parse()
 
 	hc := &http.Client{Timeout: 90 * time.Second, Transport: http.DefaultTransport.(*http.Transport).Clone()}
@@ -99,7 +101,7 @@ func main() {
 		hc.Transport.(*http.Transport).Proxy = http.ProxyURL(pu)
 	}
 	for i := 0; i < *loops; i++ {
-		r := run(*server, *role, *mode, *forceRelay, *udpBlocked, *fallback, *nbytes, hc)
+		r := run(*server+"|"+*labID, *role, *mode, *forceRelay, *udpBlocked, *fallback, *nbytes, hc)
 		if r.OK && *expect != "" && r.Path != *expect {
 			r.OK = false
 			r.Error = fmt.Sprintf("expected path %s, got %s", *expect, r.Path)
@@ -119,13 +121,15 @@ func fail(role string, err error) {
 }
 
 func getBundle(server, role string, hc *http.Client) (*bundle, error) {
+	server, id, _ := strings.Cut(server, "|")
+	q := "?id=" + url.QueryEscape(id)
 	var resp *http.Response
 	var err error
 	if role == "phone" {
-		resp, err = hc.Post(server+"/lab/attempt", "application/json", nil)
+		resp, err = hc.Post(server+"/lab/attempt"+q, "application/json", nil)
 	} else {
 		for {
-			resp, err = hc.Get(server + "/lab/next")
+			resp, err = hc.Get(server + "/lab/next" + q)
 			if err != nil || resp.StatusCode != http.StatusNoContent {
 				break
 			}
@@ -339,9 +343,21 @@ func run(server, role, mode string, forceRelay, udpBlocked bool, fallback time.D
 		res.Error = err.Error()
 		return res
 	}
-	defer conn.Close()
+	defer func() {
+		// Bounded close: report the result even if teardown stalls.
+		done := make(chan struct{})
+		go func() { conn.Close(); close(done) }()
+		select {
+		case <-done:
+		case <-time.After(3 * time.Second):
+			fmt.Fprintln(os.Stderr, "warning: transport close took more than 3s")
+		}
+	}()
 	res.Path = conn.Path()
 	res.ConnectMS = time.Since(start).Milliseconds()
+	if sp, ok := conn.(interface{ SelectedPair() string }); ok {
+		res.Extra = map[string]string{"ice_pair": sp.SelectedPair()}
+	}
 
 	if role == "host" {
 		err = hostEcho(conn)
@@ -382,9 +398,24 @@ func hostEcho(c transport.Conn) error {
 				return err
 			}
 		case frame.TypeCloseStream:
-			// Acknowledge so the phone knows every byte was echoed.
-			_ = c.Send(&frame.Frame{Type: frame.TypeCloseStream, StreamID: f.StreamID, Flags: frame.FlagFIN})
-			time.Sleep(200 * time.Millisecond)
+			// Acknowledge so the phone knows every byte was echoed, then let
+			// the phone close first so queued output is not cut off.
+			if err := c.Send(&frame.Frame{Type: frame.TypeCloseStream, StreamID: f.StreamID, Flags: frame.FlagFIN}); err != nil {
+				return err
+			}
+			done := make(chan struct{})
+			go func() {
+				for {
+					if _, err := c.Recv(); err != nil {
+						close(done)
+						return
+					}
+				}
+			}()
+			select {
+			case <-done:
+			case <-time.After(30 * time.Second):
+			}
 			return nil
 		}
 	}
