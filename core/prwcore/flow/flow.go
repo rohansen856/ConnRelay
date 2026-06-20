@@ -43,6 +43,9 @@ func (s *Sender) Grant(n int64) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closed {
+		return nil
+	}
 	if s.max > 0 && s.credit+n > s.max {
 		return ErrOverGrant
 	}
@@ -91,6 +94,9 @@ func (s *Sender) Return(n int) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closed {
+		return
+	}
 	s.credit += int64(n)
 	close(s.wake)
 	s.wake = make(chan struct{})

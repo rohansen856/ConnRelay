@@ -66,6 +66,18 @@ func TestSenderClose(t *testing.T) {
 	}
 }
 
+func TestSenderGrantAndReturnAfterClose(t *testing.T) {
+	s := NewSender(0)
+	s.Close()
+	// Late credit from the peer or a PTY read finishing after detach must not
+	// panic.
+	if err := s.Grant(10); err != nil {
+		t.Fatal(err)
+	}
+	s.Return(5)
+	s.Close()
+}
+
 func TestSenderOverGrant(t *testing.T) {
 	s := NewSender(100)
 	if err := s.Grant(100); err != nil {
