@@ -168,17 +168,17 @@ func TestTmuxBurst(t *testing.T) {
 	s := New(1, p, ph.sink)
 	go s.Run(context.Background())
 
-	// Typed immediately: the stream must hold it until tmux is ready.
-	go func() {
-		cmd := []byte("seq 1 2000000; echo BURST-$((20+22))-END\r")
-		credit := s.InitialInputCredit()
-		if int64(len(cmd)) > credit {
-			t.Error("command larger than input credit")
-		}
-		if _, err := s.Input(context.Background(), cmd); err != nil {
-			t.Error(err)
-		}
-	}()
+	// Queued immediately: the stream must hold it until tmux is ready.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go s.RunInput(ctx, nil)
+	cmd := []byte("seq 1 2000000; echo BURST-$((20+22))-END\r")
+	if int64(len(cmd)) > s.InitialInputCredit() {
+		t.Fatal("command larger than input credit")
+	}
+	if err := s.Input(cmd); err != nil {
+		t.Fatal(err)
+	}
 	got := ph.consume(t, s, 32, func(b []byte) bool { return bytes.Contains(b, []byte("BURST-42-END")) })
 	if !bytes.Contains(got, []byte("BURST-42-END")) {
 		t.Fatal("final output never arrived")
@@ -192,20 +192,54 @@ func TestTmuxBurst(t *testing.T) {
 func TestInputOverrunRejected(t *testing.T) {
 	s := New(1, nopProc{}, func(*frame.Frame) error { return nil })
 	s.InitialInputCredit()
-	close(s.ready)
-	if _, err := s.Input(context.Background(), make([]byte, flow.DefaultInputWindow+1)); err != ErrInputOverrun {
+	if err := s.Input(make([]byte, flow.DefaultInputWindow+1)); err != ErrInputOverrun {
 		t.Fatalf("got %v", err)
 	}
 }
 
-func TestInputWaitsForReady(t *testing.T) {
+func TestInputHeldUntilReadyOrTimeout(t *testing.T) {
+	old := ReadyTimeout
+	ReadyTimeout = 400 * time.Millisecond
+	defer func() { ReadyTimeout = old }()
 	var wrote atomic.Bool
 	s := New(1, &recProc{wrote: &wrote}, func(*frame.Frame) error { return nil })
 	s.InitialInputCredit()
-	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	if _, err := s.Input(ctx, []byte("x")); err == nil || wrote.Load() {
+	go s.RunInput(ctx, nil)
+	if err := s.Input([]byte("x")); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(200 * time.Millisecond)
+	if wrote.Load() {
 		t.Fatal("input written before the process produced output")
+	}
+	time.Sleep(400 * time.Millisecond)
+	if !wrote.Load() {
+		t.Fatal("input never written after the readiness timeout")
+	}
+}
+
+func TestInputRegrantsCredit(t *testing.T) {
+	var wrote atomic.Bool
+	s := New(1, &recProc{wrote: &wrote}, func(*frame.Frame) error { return nil })
+	total := s.InitialInputCredit()
+	close(s.ready)
+	var granted atomic.Int64
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go s.RunInput(ctx, func(g int64) { granted.Add(g) })
+	for sent := int64(0); sent < total; sent += 1024 {
+		if err := s.Input(make([]byte, 1024)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for granted.Load() < total/2 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if granted.Load() < total/2 {
+		t.Fatalf("re-granted only %d of %d", granted.Load(), total)
 	}
 }
 

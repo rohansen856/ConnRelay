@@ -7,9 +7,11 @@
 // buffer and tmux; no bytes are dropped and buffering is bounded to one read
 // buffer.
 //
-// Input: phone keystrokes are held until the process has produced its first
-// output, because tmux discards input that arrives before the attaching
-// client finishes terminal negotiation.
+// Input: keystrokes are queued without blocking the connection's receive
+// loop (the queue is bounded by the 64 KiB input credit) and written by
+// RunInput. They are held until the process has produced its first output,
+// because tmux discards input that arrives before the attaching client
+// finishes terminal negotiation; ReadyTimeout caps that wait.
 package termstream
 
 import (
@@ -19,6 +21,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"syscall"
+	"time"
 
 	"github.com/rohansen856/connrelay/core/prwcore/flow"
 	"github.com/rohansen856/connrelay/core/prwcore/frame"
@@ -44,7 +47,9 @@ type Stream struct {
 
 	ready     chan struct{}
 	readyOnce sync.Once
-	wmu       sync.Mutex
+	qmu       sync.Mutex
+	queue     [][]byte
+	queued    chan struct{} // signalled when queue becomes non-empty
 	seq       atomic.Uint32
 	// Stats for tests and diagnostics.
 	BytesOut atomic.Int64
@@ -56,11 +61,15 @@ type Stream struct {
 func New(id uint16, p Proc, sink Sink) *Stream {
 	return &Stream{
 		ID: id, proc: p, sink: sink,
-		out:   flow.NewSender(flow.DefaultOutputWindow),
-		in:    flow.NewReceiver(flow.DefaultInputWindow),
-		ready: make(chan struct{}),
+		out:    flow.NewSender(flow.DefaultOutputWindow),
+		in:     flow.NewReceiver(flow.DefaultInputWindow),
+		ready:  make(chan struct{}),
+		queued: make(chan struct{}, 1),
 	}
 }
+
+// ReadyTimeout caps how long input is held waiting for the first output.
+var ReadyTimeout = 2 * time.Second
 
 // InitialInputCredit returns the INPUT credit to announce after terminal.ready.
 func (s *Stream) InitialInputCredit() int64 { return s.in.Initial() }
@@ -103,25 +112,51 @@ func isPTYClosed(err error) bool { return errors.Is(err, syscall.EIO) }
 // ErrInputOverrun is returned when the phone sends more INPUT than granted.
 var ErrInputOverrun = errors.New("termstream: input exceeds granted credit")
 
-// Input writes an INPUT payload to the process, waiting for readiness. It
-// returns the INPUT credit to re-grant, or 0.
-func (s *Stream) Input(ctx context.Context, b []byte) (int64, error) {
+// Input queues an INPUT payload without blocking. The caller must not reuse
+// b. It fails if the phone exceeded its granted input credit.
+func (s *Stream) Input(b []byte) error {
 	if err := s.in.Received(len(b)); err != nil {
-		return 0, ErrInputOverrun
+		return ErrInputOverrun
 	}
+	s.qmu.Lock()
+	s.queue = append(s.queue, b)
+	s.qmu.Unlock()
+	select {
+	case s.queued <- struct{}{}:
+	default:
+	}
+	return nil
+}
+
+// RunInput writes queued input to the process until ctx ends. grant is
+// called with INPUT credit to re-grant to the phone.
+func (s *Stream) RunInput(ctx context.Context, grant func(int64)) error {
 	select {
 	case <-s.ready:
+	case <-time.After(ReadyTimeout):
 	case <-ctx.Done():
-		return 0, ctx.Err()
+		return ctx.Err()
 	}
-	s.wmu.Lock()
-	_, err := s.proc.Write(b)
-	s.wmu.Unlock()
-	if err != nil {
-		return 0, err
+	for {
+		s.qmu.Lock()
+		q := s.queue
+		s.queue = nil
+		s.qmu.Unlock()
+		for _, b := range q {
+			if _, err := s.proc.Write(b); err != nil {
+				return err
+			}
+			s.BytesIn.Add(int64(len(b)))
+			if g := s.in.Consumed(len(b)); g > 0 && grant != nil {
+				grant(g)
+			}
+		}
+		select {
+		case <-s.queued:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
-	s.BytesIn.Add(int64(len(b)))
-	return s.in.Consumed(len(b)), nil
 }
 
 // Resize forwards a terminal size change.
