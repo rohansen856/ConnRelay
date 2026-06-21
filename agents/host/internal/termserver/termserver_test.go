@@ -55,7 +55,12 @@ func connect(t *testing.T, s *Server) *phone {
 	t.Helper()
 	pc, hc := transport.Pipe("p", "h", "h", "p")
 	go s.Serve(context.Background(), hc)
-	p := &phone{t: t, c: pc, ctl: make(chan *control.Envelope, 64), out: map[uint16]*bytes.Buffer{},
+	return newPhone(t, pc)
+}
+
+// newPhone wraps an established (already verified) transport.
+func newPhone(t *testing.T, c transport.Conn) *phone {
+	p := &phone{t: t, c: c, ctl: make(chan *control.Envelope, 64), out: map[uint16]*bytes.Buffer{},
 		recv: map[uint16]*flow.Receiver{}, in: map[uint16]*flow.Sender{}, done: make(chan struct{})}
 	go p.loop()
 	return p
@@ -73,6 +78,11 @@ func (p *phone) loop() {
 			env, err := control.Decode(f)
 			if err != nil {
 				return
+			}
+			if env.Type == control.TypeTerminalReady {
+				// Register stream state before handling anything that
+				// follows (the host's input credit comes right after ready).
+				p.register(env)
 			}
 			if env.Type == control.TypeFlowCredit {
 				var fc control.FlowCredit
@@ -137,7 +147,21 @@ type ready struct {
 	Resumed   bool   `json:"resumed"`
 }
 
-// stream registers flow state for a ready stream and grants output credit.
+// register creates flow state for a stream announced by terminal.ready. It
+// runs on the receive loop so later frames for the stream find it.
+func (p *phone) register(env *control.Envelope) {
+	var r ready
+	if json.Unmarshal(env.Payload, &r) != nil {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.out[r.StreamID] = &bytes.Buffer{}
+	p.recv[r.StreamID] = flow.NewReceiver(flow.DefaultOutputWindow)
+	p.in[r.StreamID] = flow.NewSender(flow.DefaultInputWindow)
+}
+
+// stream grants output credit for a ready stream and returns its IDs.
 func (p *phone) stream(env *control.Envelope) ready {
 	p.t.Helper()
 	var r ready
@@ -145,9 +169,6 @@ func (p *phone) stream(env *control.Envelope) ready {
 		p.t.Fatal(err)
 	}
 	p.mu.Lock()
-	p.out[r.StreamID] = &bytes.Buffer{}
-	p.recv[r.StreamID] = flow.NewReceiver(flow.DefaultOutputWindow)
-	p.in[r.StreamID] = flow.NewSender(flow.DefaultInputWindow)
 	initial := p.recv[r.StreamID].Initial()
 	p.mu.Unlock()
 	p.send(control.TypeFlowCredit, control.FlowCredit{StreamID: r.StreamID, Bytes: initial})
