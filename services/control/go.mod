@@ -1,6 +1,8 @@
 module github.com/rohansen856/connrelay/services/control
 
-go 1.25.5
+go 1.26.0
+
+toolchain go1.27.2
 
 require (
 	github.com/coder/websocket v1.8.15
