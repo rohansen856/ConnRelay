@@ -124,8 +124,11 @@ func TestEndToEndFrames(t *testing.T) {
 		t.Fatal(err)
 	}
 	f, err := host.Recv()
-	if err != nil || string(f.Payload) != "exit\r" {
-		t.Fatalf("input: %v %q", err, f)
+	if err != nil {
+		t.Fatalf("input: %v", err)
+	}
+	if string(f.Payload) != "exit\r" {
+		t.Fatalf("input payload %q", f.Payload)
 	}
 	if e.relay.Stats.Bytes.Load() < n*frame.MaxPayload {
 		t.Fatalf("relay counted %d bytes", e.relay.Stats.Bytes.Load())
