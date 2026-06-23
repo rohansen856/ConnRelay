@@ -95,7 +95,7 @@ flowchart LR
 | Phase | Goal | Exit criteria |
 |---|---|---|
 | **0: Decisions and repo** | Settle the open decisions, bootstrap the repository, CI hygiene, threat-model review, arrange devices and Apple developer access. | No open decision changes the transport or the data model. |
-| **1: Feasibility spikes** | Prove every data path on real phones and prove terminal persistence. Choose the client transport core. Freeze the wire contracts (frames, schemas, golden vectors, OpenAPI). | Gate A |
+| **1: Feasibility spikes** *(Android and Linux done)* | Prove every data path on real phones and prove terminal persistence. Choose the client transport core. Freeze the wire contracts (frames, schemas, golden vectors, OpenAPI). | Gate A |
 | **2: Backend and identity** | Control-plane skeleton and migrations. Google OIDC and the allowlist. Devices, pairing, grants, tickets, TURN credentials. Signaling and the WSS relay. Audit, outbox, rate limits, metrics. | Cross-account, replay, expiry and revocation tests pass in CI against real Postgres. |
 | **3: Host agent and terminal engine** | Key storage, the `pair` CLI, control WSS, lease cache. Shared-core transports and attestation. tmux and PTY backends, reconciliation, limits, systemd unit, `.deb` package. | A headless client creates a session, detaches, and reattaches after an agent restart, over both transports. |
 | **4: Flutter app** | Sign-in and onboarding, dashboard, pairing, host detail and access, connection progress, terminal, sessions, activity, settings and diagnostics, themes and accessibility. | A tester completes pair → grant → terminal → disconnect → reattach without help. |
@@ -104,6 +104,8 @@ flowchart LR
 | **7: Pilot and release** | Pilot with measured service indicators. Publish the known limitations and the tested-network matrix. Work through the release checklist. | Gate E |
 
 ### Phase 1 spikes
+
+Status: done for Linux hosts and Android; iOS and the carrier field run are open. Results and evidence: [spike results](development/spike-results.md).
 
 | Spike | Question | Success criterion |
 |---|---|---|
