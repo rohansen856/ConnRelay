@@ -17,16 +17,16 @@ migrations/                   # goose SQL migrations (planned)
 deploy/{terraform,compose,coturn,caddy,scripts}/   (planned)
 tests/{contract,integration,netlab}/               (planned)
 docs/                         # project documentation
-.github/workflows/            # CI (planned)
+.github/workflows/            # CI
 ```
 
 ## Toolchain
 
 | Tool | Version | Used for |
 |---|---|---|
-| Go | 1.25.x | Control plane, agent, shared core |
+| Go | 1.26+ (toolchain pinned to go1.27.2 via `go.mod`) | Control plane, agent, shared core |
 | Flutter / Dart | 3.41.x / 3.11.x | Mobile app |
-| gomobile | Latest `golang.org/x/mobile` | Binding the shared core into the app (pending the Phase 1 decision) |
+| gomobile | Latest `golang.org/x/mobile` | Binding the shared core into the app. Build with `-ldflags=-checklinkname=0` (Pion's Android interface code needs it); see `apps/mobile_spike/build-aar.sh`. |
 | Docker + Compose | 29.x | testcontainers, netlab, local stack |
 | tmux | ≥ 3.0 | Persistent sessions on hosts |
 | PostgreSQL | 16 | Database, run in a container |

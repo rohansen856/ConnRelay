@@ -10,6 +10,17 @@
 4. **Every release-critical requirement maps to a test.** When a test cannot be automated, the reason is written next to it.
 5. **Golden vectors are the wire contract.** The Go and Dart code must decode and encode the same bytes.
 
+## Running the suites
+
+| Command | What it runs | Needs |
+|---|---|---|
+| `make vet test-race` | Unit and integration tests for every Go module, including PTY/tmux tests and in-process WebRTC, TURN and relay tests | Go, tmux |
+| `make spike-app` | Flutter analyze and tests for the spike app, including the xterm.dart TUI replay when fixtures are recorded | Flutter |
+| `make netlab` | Docker network lab: NAT types, TURN over UDP/TCP/TLS-443, HTTPS-proxy-only egress | Docker |
+| `make spike-s4` | tmux survival across an agent restart under `systemd --user` | systemd user session, tmux |
+| `LAN_IP=… make devicelab` | Real Android phone over adb: direct, TURN, WSS relay, auto, hardware key | adb device on the same network, spike APK installed |
+| `tests/spikes/s5_capture_tui.sh <name> <cmd>` | Records TUI fixtures for the xterm.dart replay test | tmux, the TUI |
+
 ## Test pyramid
 
 | Layer | Share | Scope | Tools |
