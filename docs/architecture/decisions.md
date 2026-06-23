@@ -92,7 +92,7 @@ Rating scale: ●●● good · ●● acceptable · ● poor.
 
 ## ADR-003: Shared Go transport core (`prwcore`)
 
-- **Status:** Proposed. Decided after the mobile feasibility spike.
+- **Status:** Proposed, **confirmed on Android** by spike S1 (direct, TURN, WSS relay and auto modes pass on a real device; see [spike results](../development/spike-results.md)). iOS must pass the same suite before this is accepted.
 - **Context:**
   - The Flutter WebRTC plugin has known backpressure caveats: buffered amounts are cached from events, and there is no max-message-size API.
   - The libwebrtc ↔ Pion interop must be proven.
@@ -284,7 +284,7 @@ Rating scale: ●●● good · ●● acceptable · ● poor.
 
 ## ADR-012: Flutter stack
 
-- **Status:** Proposed.
+- **Status:** Proposed. Spike S5 confirmed the fork: xterm.dart 4.0.0 reproduces Claude Code, Codex, htop and less screens exactly, but has two defects (DECCKM ignored for arrow keys; a buffer assertion on Codex's main UI). See [spike results](../development/spike-results.md#s5-xtermdart-with-coding-agent-tuis).
 - **Context:** The UI must model six distinct connection and session states. xterm.dart, the only mature Flutter terminal widget, has been inactive since 2025.
 - **Decision:**
   - **App framework:** Riverpod (with code generation) for state and go_router with auth guards for routing.
