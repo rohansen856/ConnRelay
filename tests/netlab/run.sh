@@ -8,7 +8,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 root=$(cd ../.. && pwd)
-export GOTOOLCHAIN=${GOTOOLCHAIN:-local}
+
 
 mkdir -p .lab/bin
 (cd "$root" && CGO_ENABLED=0 go build -o tests/netlab/.lab/bin/prw-labserver ./services/control/cmd/prw-labserver \

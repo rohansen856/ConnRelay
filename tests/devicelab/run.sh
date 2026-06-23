@@ -13,7 +13,7 @@ root=$(cd ../.. && pwd)
 : "${LAN_IP:?set LAN_IP to this machine's address on the phone's network}"
 port=${PORT:-18443}
 work=$(mktemp -d /tmp/prw-devicelab.XXXXXX)
-export GOTOOLCHAIN=${GOTOOLCHAIN:-local}
+
 (cd "$root" && go build -o "$work/prw-labserver" ./services/control/cmd/prw-labserver \
   && go build -o "$work/prw-labpeer" ./tests/netlab/cmd/prw-labpeer)
 

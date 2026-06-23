@@ -1,11 +1,11 @@
 # Private Remote Workspace: developer entry points.
 # Go modules are listed in go.work; the mobile spike probe builds separately
-# (it needs Go >= 1.26 for golang.org/x/mobile).
+# with GOWORK=off (see apps/mobile_spike/build-aar.sh).
 
 GO      ?= go
 FLUTTER ?= flutter
 MODULES := core/prwcore services/control agents/host tests
-export GOTOOLCHAIN ?= local
+# The toolchain is pinned by the toolchain line in go.mod (GOTOOLCHAIN=auto).
 
 .PHONY: all fmt vet test test-race test-short spike-app netlab spike-s4 devicelab aar ci
 
