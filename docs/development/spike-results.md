@@ -37,8 +37,8 @@ Every result below comes from a test or script in this repository. The commands 
 
 - **Lifecycle.** A 6 MB transfer over the WSS relay kept running after the app was backgrounded and the screen was switched off. It finished about 40 s later. Longer periods, such as Doze, were not tested.
 - **Size.**
-  - AAR: 4.5 MB.
-  - `libgojni.so`: 11.9 MB, stored uncompressed in the APK (the arm64 release APK is 28.2 MB in total).
+  - AAR: 4.8 MB (Go 1.27.2 build).
+  - `libgojni.so`: 12.3 MB, stored uncompressed in the APK (the arm64 release APK is 28.6 MB in total).
   - Both are within the proposed budget of 25 MB or less.
   - The probe also contains test-client code, so the production core should be slightly smaller.
 - **Not done:**
