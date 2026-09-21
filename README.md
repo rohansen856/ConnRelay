@@ -1,6 +1,6 @@
 # Private Remote Workspace
 
-> Working name. **Status:** design complete, implementation starting (Phase 1 feasibility spikes).
+> Working name. **Status:** Phase 1 feasibility spikes done for Linux hosts and Android ([results](docs/development/spike-results.md)); iOS and the carrier field run are open. Not usable as a product yet.
 
 Private Remote Workspace (PRW) gives your phones secure terminal access to your Linux computers from any network. It is self-hosted and works without a VPN client, a public SSH port or a third-party relay.
 
@@ -45,15 +45,25 @@ Details: [architecture overview](docs/architecture/overview.md).
 
 | Path | Contents | Status |
 |---|---|---|
-| `apps/mobile/` | Flutter app (Android, iOS) | planned |
-| `core/prwcore/` | Shared Go core: framing, attestation, transports | planned |
-| `services/control/` | Go control plane: REST, signaling, relay | planned |
-| `agents/host/` | Go Linux host agent and CLI | planned |
-| `protocol/` | Normative protocol specs, schemas, golden vectors | planned |
-| `migrations/` | PostgreSQL migrations (goose) | planned |
-| `deploy/` | Terraform, Docker Compose, coturn, Caddy | planned |
-| `tests/` | Contract, integration and network-lab tests | planned |
+| `core/prwcore/` | Shared Go core: frames, flow control, attestation, tokens, WebRTC and WSS-relay transports, connection manager | Phase 1 (tested) |
+| `services/control/` | Go control plane: WSS relay splicer and TURN credentials so far, plus a network-lab stand-in | Phase 1 (partial) |
+| `agents/host/` | Go Linux host agent: PTY, tmux backend, flow-controlled streams, terminal session server | Phase 1 (partial) |
+| `apps/mobile_spike/` | Throwaway Flutter app and gomobile probe used for the on-device spikes | Spike |
+| `apps/mobile/` | Product Flutter app (Android, iOS) | Planned (Phase 4) |
+| `protocol/` | Golden test vectors (frames so far) | Phase 1 (partial) |
+| `tests/` | Network lab (Docker), device lab (adb), spike scripts | Phase 1 |
+| `migrations/`, `deploy/` | Database migrations, Terraform, Compose, coturn, Caddy | Planned |
 | `docs/` | Project documentation | ✔ |
+
+### Run the tests
+
+```sh
+make vet test-race      # all Go modules (needs tmux)
+make spike-app          # Flutter spike app + xterm.dart TUI replay
+make netlab             # Docker NAT/TURN/HTTPS-proxy lab
+make spike-s4           # tmux survives agent restart under systemd --user
+LAN_IP=<ip> make devicelab   # real Android phone over adb
+```
 
 ## Documentation
 
@@ -71,7 +81,7 @@ Details: [architecture overview](docs/architecture/overview.md).
 | Layer | Choice |
 |---|---|
 | Mobile | Flutter 3.41 / Dart 3.11, Riverpod, go_router, xterm.dart |
-| Backend and agent | Go 1.25, Pion WebRTC v4, pgx v5, sqlc, goose, coder/websocket, creack/pty |
+| Backend and agent | Go 1.26+ (toolchain go1.27.2), Pion WebRTC v4, pgx v5, sqlc, goose, coder/websocket, creack/pty |
 | Data | PostgreSQL 16+ |
 | Relay | coturn ≥ 4.18 and a built-in WSS relay |
 | Identity | Google OIDC; ECDSA P-256 device keys; Ed25519 server signing keys |
