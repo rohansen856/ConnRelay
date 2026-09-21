@@ -46,6 +46,24 @@ Every result below comes from a test or script in this repository. The commands 
   - an iOS build;
   - a field run over a real carrier NAT (that needs the public deployment).
 
+### Field run over the public internet
+
+**Setup.**
+- The lab control plane is exposed through a temporary Cloudflare quick tunnel.
+- The phone reaches it over its carrier network (5G); the host runs on the laptop.
+- Run with `tests/fieldlab/run.sh`.
+
+| Mode | Path | Connect time | RTT | 1 MiB echo |
+|---|---|---|---|---|
+| WSS relay through Cloudflare's edge | wss_relay | 1.69 s | 261 ms | OK, 2.2 Mbit/s (relay cap) |
+| Auto, with public STUN | direct | 516 ms | 3.6 ms | OK |
+
+- **WSS relay over a real CDN edge.** The relay path works through Cloudflare. Its 261 ms RTT covers both legs through the Delhi edge, which is within the proposed relay echo target of under 500 ms.
+- **Direct-path caveat.** The laptop is connected to the phone's own hotspot, so the direct pair is LAN-local. A true carrier-to-carrier direct or TURN measurement still needs a host on a different network.
+- **Tunnel setup.**
+  - A fresh `trycloudflare.com` name can take a minute to resolve on the carrier's DNS, so the script waits for it.
+  - A local `~/.cloudflared/config.yml` with ingress rules overrides `--url`, so the script runs the quick tunnel with an empty config.
+
 ## S2: TURN paths and the two-address deployment (network lab)
 
 **Setup.**
@@ -162,6 +180,6 @@ Key encodings for Esc, Tab, Enter, Backspace and Ctrl chords, and bracketed past
    - a Secure Enclave P-256 signer for S6.
 
    This needs macOS and Xcode.
-2. **Field run on a carrier network:** a phone on mobile data (CGNAT or 464XLAT) against the public deployment (Phase 6 infrastructure, or a temporary instance).
+2. **Field run on a carrier network:** the WSS relay is verified over the carrier network through Cloudflare. Still open: a host on a different network from the phone, for carrier-NAT direct and TURN rates (this needs the public TURN deployment).
 3. **TURN-TLS:443 from the phone.** It is verified in the lab with Linux peers. Re-run it from the device once a public coturn with a real certificate exists.
 4. **xterm.dart fork.** Fix both defects and run the S5 replay suite in CI with recorded fixtures. Committed fixtures must be scrubbed of user names and paths.
