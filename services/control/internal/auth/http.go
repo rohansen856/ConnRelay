@@ -54,19 +54,21 @@ func (s *Service) RequirePhone(next http.Handler) http.Handler {
 			return httpx.ErrUnauthenticated
 		}
 		ctx := r.Context()
-		sess, err := store.GetLiveAuthSession(ctx, s.Store.Pool, sid)
-		if errors.Is(err, store.ErrNotFound) || (err == nil && (sess.DeviceID != dev || sess.AccountID != acct)) {
-			return httpx.ErrUnauthenticated
-		}
-		if err != nil {
-			return err
-		}
+		// Device first, so a revoked phone learns why rather than seeing a
+		// generic sign-in error (its sessions are revoked with it).
 		d, err := store.GetDevice(ctx, s.Store.Pool, acct, dev)
 		if err != nil {
 			return httpx.ErrUnauthenticated
 		}
 		if d.AdminState == "revoked" {
 			return ErrDeviceRevoked
+		}
+		sess, err := store.GetLiveAuthSession(ctx, s.Store.Pool, sid)
+		if errors.Is(err, store.ErrNotFound) || (err == nil && (sess.DeviceID != dev || sess.AccountID != acct)) {
+			return httpx.ErrUnauthenticated
+		}
+		if err != nil {
+			return err
 		}
 		p := &Principal{AccountID: acct, DeviceID: dev, SessionID: sid}
 		next.ServeHTTP(w, r.WithContext(context.WithValue(ctx, principalKey{}, p)))
