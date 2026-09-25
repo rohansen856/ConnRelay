@@ -128,3 +128,25 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, r, err)
 	}
 }
+
+// IfMatch parses the If-Match header as a resource version ("3" or 3). A
+// missing header returns 428 precondition_required.
+func IfMatch(r *http.Request) (int, error) {
+	h := strings.Trim(strings.TrimSpace(r.Header.Get("If-Match")), `"`)
+	if h == "" {
+		return 0, E(http.StatusPreconditionRequired, "precondition_required", "If-Match header is required.")
+	}
+	var v int
+	if _, err := fmt.Sscanf(h, "%d", &v); err != nil || v < 1 {
+		return 0, E(http.StatusBadRequest, "validation_failed", "Invalid If-Match header.")
+	}
+	return v, nil
+}
+
+// ErrPrecondition is returned when a version check fails.
+var ErrPrecondition = E(http.StatusPreconditionFailed, "precondition_failed", "The resource changed. Reload and retry.")
+
+// SetETag sets the ETag for a versioned resource.
+func SetETag(w http.ResponseWriter, version int) {
+	w.Header().Set("ETag", fmt.Sprintf(`"%d"`, version))
+}
