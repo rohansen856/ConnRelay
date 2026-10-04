@@ -35,3 +35,21 @@ func TestPoP(t *testing.T) {
 		}
 	}
 }
+
+func TestPoPNonceRequiredExceptPairCreate(t *testing.T) {
+	s, _ := NewSoftwareSigner()
+	pub, _ := ParsePublicKey(s.PublicKeySPKI())
+	now := time.Now()
+	jws, _ := SignPoP(s, PoP{Purpose: PurposeRefresh, DeviceID: "d"}, now)
+	if err := VerifyPoP(pub, jws, PoP{Purpose: PurposeRefresh, DeviceID: "d"}, now); !errors.Is(err, ErrInvalid) {
+		t.Fatal("nonce-free refresh proof accepted")
+	}
+	jws, _ = SignPoP(s, PoP{Purpose: PurposePairCreate, SPKIFP: "f"}, now)
+	if err := VerifyPoP(pub, jws, PoP{Purpose: PurposePairCreate, SPKIFP: "f"}, now); err != nil {
+		t.Fatal(err)
+	}
+	jws, _ = SignPoP(s, PoP{Purpose: PurposePairComplete, Nonce: "n", ChallengeID: "c1"}, now)
+	if err := VerifyPoP(pub, jws, PoP{Purpose: PurposePairComplete, Nonce: "n", ChallengeID: "c2"}, now); !errors.Is(err, ErrInvalid) {
+		t.Fatal("proof for another challenge accepted")
+	}
+}

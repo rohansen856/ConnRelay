@@ -13,6 +13,9 @@ const (
 	PurposeAuth    = "prw.auth.v1"    // phone sign-in: binds the key being registered
 	PurposeRefresh = "prw.refresh.v1" // phone token refresh
 	PurposeAgent   = "prw.agent.v1"   // host agent control-socket login
+
+	PurposePairCreate   = "prw.pair.create.v1"   // host creates a pairing challenge
+	PurposePairComplete = "prw.pair.complete.v1" // host completes an approved pairing
 )
 
 // PoPMaxAge bounds how old a proof may be (plus MaxSkew into the future).
@@ -24,7 +27,9 @@ type PoP struct {
 	Nonce    string `json:"nonce"`
 	SPKIFP   string `json:"spki_fp,omitempty"`
 	DeviceID string `json:"device_id,omitempty"`
-	IAT      int64  `json:"iat"`
+	// ChallengeID binds a pairing proof to one challenge.
+	ChallengeID string `json:"challenge_id,omitempty"`
+	IAT         int64  `json:"iat"`
 }
 
 // SignPoP signs a proof for purpose over nonce.
@@ -34,7 +39,9 @@ func SignPoP(s Signer, p PoP, now time.Time) (string, error) {
 }
 
 // VerifyPoP checks a proof made with pub. want.Purpose and want.Nonce must
-// match exactly, as must SPKIFP and DeviceID when set in want.
+// match exactly, as must SPKIFP, DeviceID and ChallengeID when set in want.
+// Only PurposePairCreate is nonce-free (it is self-certifying and bounded by
+// iat; the challenge it creates carries its own nonce).
 func VerifyPoP(pub *ecdsa.PublicKey, jws string, want PoP, now time.Time) error {
 	payload, err := Verify(pub, jws)
 	if err != nil {
@@ -47,8 +54,10 @@ func VerifyPoP(pub *ecdsa.PublicKey, jws string, want PoP, now time.Time) error 
 	switch {
 	case got.Purpose != want.Purpose:
 		return fmt.Errorf("%w: purpose", ErrInvalid)
-	case got.Nonce == "" || got.Nonce != want.Nonce:
+	case got.Nonce != want.Nonce || (want.Nonce == "" && want.Purpose != PurposePairCreate):
 		return fmt.Errorf("%w: nonce", ErrInvalid)
+	case want.ChallengeID != "" && got.ChallengeID != want.ChallengeID:
+		return fmt.Errorf("%w: challenge", ErrInvalid)
 	case want.SPKIFP != "" && got.SPKIFP != want.SPKIFP:
 		return fmt.Errorf("%w: key fingerprint", ErrInvalid)
 	case want.DeviceID != "" && got.DeviceID != want.DeviceID:
