@@ -139,3 +139,21 @@ type Relay struct {
 	Role string `json:"role"`
 	Dev  string `json:"dev"`
 }
+
+// LeaseGrant is one phone allowed on a host.
+type LeaseGrant struct {
+	PhoneDeviceID  string   `json:"phone_device_id"`
+	PhoneKeySPKI   string   `json:"phone_key_spki"` // base64url DER
+	Caps           []string `json:"caps"`
+	GrantID        string   `json:"grant_id"`
+	GrantExpiresAt int64    `json:"grant_expires_at,omitempty"` // unix seconds, 0 = none
+}
+
+// Lease is the signed list of phones a host may serve (protocol v1 §14). The
+// host replaces its cache atomically on each lease and refuses new sessions
+// once the lease expires.
+type Lease struct {
+	Registered
+	Host   string       `json:"host"`
+	Grants []LeaseGrant `json:"grants"`
+}

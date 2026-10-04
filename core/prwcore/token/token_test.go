@@ -70,3 +70,21 @@ func TestVerifyRejects(t *testing.T) {
 	ntok, _ := is.Issue(TypeRelay, nojti)
 	check("no jti", ks.Verify(ntok, TypeRelay, now, &r))
 }
+
+func TestLease(t *testing.T) {
+	is, ks := keys(t)
+	now := time.Unix(1760313840, 0)
+	in := Lease{Registered: Registered{IAT: now.Unix(), EXP: now.Add(10 * time.Minute).Unix(), JTI: "l1"}, Host: "h1",
+		Grants: []LeaseGrant{{PhoneDeviceID: "p1", PhoneKeySPKI: "k", Caps: []string{"terminal"}, GrantID: "g1"}}}
+	tok, err := is.Issue(TypeLease, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out Lease
+	if err := ks.Verify(tok, TypeLease, now, &out); err != nil || out.Host != "h1" || len(out.Grants) != 1 {
+		t.Fatalf("%+v %v", out, err)
+	}
+	if err := ks.Verify(tok, TypeTicket, now, &out); !errors.Is(err, ErrInvalid) {
+		t.Fatal("lease accepted as a ticket")
+	}
+}
