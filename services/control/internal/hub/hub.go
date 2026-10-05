@@ -84,10 +84,19 @@ type sock struct {
 
 type attempt struct {
 	phone, host uuid.UUID
+	created     time.Time
 	expires     time.Time
 	signals     int
 	candidates  int
+	// pending holds host->phone messages sent before the phone's signaling
+	// socket was connected (at most maxPending, delivered on connect).
+	pending []any
 }
+
+const (
+	maxPending  = 32
+	pendingLife = 15 * time.Second
+)
 
 func (h *Hub) init() {
 	if h.agents == nil {
@@ -170,7 +179,7 @@ func (h *Hub) RegisterAttempt(id, phone, host uuid.UUID, expires time.Time) {
 			delete(h.attempts, k)
 		}
 	}
-	h.attempts[id] = &attempt{phone: phone, host: host, expires: expires}
+	h.attempts[id] = &attempt{phone: phone, host: host, created: now, expires: expires}
 }
 
 // EndAttempt forbids further signaling for an attempt.
@@ -234,7 +243,15 @@ func (h *Hub) route(ctx context.Context, from uuid.UUID, fromHost bool, m Msg) e
 	// The sender is derived from the socket; never trust a client value.
 	out := Msg{Type: "signal", AttemptID: m.AttemptID, Kind: m.Kind, From: from.String(), Payload: m.Payload}
 	if fromHost {
-		h.SendToPhone(ctx, phone, out)
+		h.mu.Lock()
+		online := len(h.phones[phone]) > 0
+		if !online && len(a.pending) < maxPending && time.Since(a.created) < pendingLife {
+			a.pending = append(a.pending, out)
+		}
+		h.mu.Unlock()
+		if online {
+			h.SendToPhone(ctx, phone, out)
+		}
 		return nil
 	}
 	b, _ := json.Marshal(out)
@@ -516,6 +533,19 @@ func (h *Hub) ServePhone(w http.ResponseWriter, r *http.Request) {
 		h.mu.Unlock()
 	}()
 	_ = s.send(ctx, map[string]any{"type": "auth.ok"})
+	// Deliver host messages that arrived before this socket existed.
+	h.mu.Lock()
+	var backlog []any
+	for _, a := range h.attempts {
+		if a.phone == p.DeviceID {
+			backlog = append(backlog, a.pending...)
+			a.pending = nil
+		}
+	}
+	h.mu.Unlock()
+	for _, m := range backlog {
+		_ = s.send(ctx, m)
+	}
 	for {
 		m, err := read(ctx, ws, 0)
 		if err != nil {
