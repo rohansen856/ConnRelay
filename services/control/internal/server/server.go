@@ -51,7 +51,11 @@ func New(cfg *config.Config, pool *pgxpool.Pool, verifier auth.IDTokenVerifier, 
 	jwk := func() []pairing.JWK {
 		return []pairing.JWK{{KID: ticketKID, KTY: "OKP", CRV: "Ed25519", X: base64.RawURLEncoding.EncodeToString(ticketPub), Use: "sig"}}
 	}
-	wsBase := "wss://" + strings.TrimPrefix(strings.TrimPrefix(cfg.PublicBaseURL, "https://"), "http://")
+	// wss for https deployments; ws only for local http (development, tests).
+	wsBase := "wss://" + strings.TrimPrefix(cfg.PublicBaseURL, "https://")
+	if strings.HasPrefix(cfg.PublicBaseURL, "http://") {
+		wsBase = "ws://" + strings.TrimPrefix(cfg.PublicBaseURL, "http://")
+	}
 
 	a := &auth.Service{Store: st, Google: verifier, Nonces: nonce.New(2*time.Minute, 100000),
 		Tokens: &tokens.Manager{Issuer: token.Issuer{KID: accessKID, Key: cfg.AccessKey}, Keys: token.KeySet{accessKID: accessPub}, ISS: cfg.PublicBaseURL}}
