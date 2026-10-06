@@ -150,6 +150,7 @@ func Connect(ctx context.Context, cfg Config, t Target) (transport.Conn, *Result
 		map[string]string{"host_device_id": t.HostID, "capability": "terminal"}, &a); err != nil {
 		return nil, nil, err
 	}
+	sig.setAttempt(a.AttemptID)
 	spki, err := base64.RawURLEncoding.DecodeString(a.Host.SPKI)
 	if err != nil || attest.Fingerprint(spki) != t.PinnedFP {
 		cfg.report(context.Background(), a.AttemptID, "failed", "", "peer_identity_mismatch")
@@ -255,6 +256,32 @@ type signaling struct {
 	peer  *webrtc.Peer
 	queue []webrtc.Signal
 	done  chan struct{}
+	// attempt is the attempt this socket serves; messages for any other
+	// attempt (e.g. late signals from an earlier one) are ignored. Until it
+	// is known, messages are held in early.
+	attempt string
+	early   []sigMsg
+}
+
+type sigMsg struct {
+	Type      string          `json:"type"`
+	AttemptID string          `json:"attempt_id"`
+	Kind      string          `json:"kind"`
+	Payload   json.RawMessage `json:"payload"`
+}
+
+// setAttempt fixes the attempt and replays held messages that match it.
+func (s *signaling) setAttempt(id string) {
+	s.mu.Lock()
+	s.attempt = id
+	early := s.early
+	s.early = nil
+	s.mu.Unlock()
+	for _, m := range early {
+		if m.AttemptID == id {
+			s.handle(m)
+		}
+	}
 }
 
 func dialSignaling(ctx context.Context, cfg Config, url string) (*signaling, error) {
@@ -290,41 +317,54 @@ func (s *signaling) loop() {
 		if err != nil {
 			return
 		}
-		var m struct {
-			Type    string          `json:"type"`
-			Kind    string          `json:"kind"`
-			Payload json.RawMessage `json:"payload"`
-		}
+		var m sigMsg
 		if json.Unmarshal(b, &m) != nil || m.Type != "signal" {
 			continue
 		}
-		switch m.Kind {
-		case "tls_fingerprint":
-			var p struct {
-				SHA256 string `json:"sha256"`
+		s.mu.Lock()
+		switch {
+		case s.attempt == "":
+			if len(s.early) < 64 {
+				s.early = append(s.early, m)
 			}
-			if json.Unmarshal(m.Payload, &p) == nil {
-				select {
-				case s.tlsFP <- p.SHA256:
-				default:
-				}
-			}
-		case "answer", "ice_candidate", "ice_complete":
-			var w webrtc.Signal
-			if json.Unmarshal(m.Payload, &w) != nil {
-				continue
-			}
-			w.Type = m.Kind
-			s.mu.Lock()
-			if s.peer == nil {
-				s.queue = append(s.queue, w)
-				s.mu.Unlock()
-				continue
-			}
-			p := s.peer
 			s.mu.Unlock()
-			_ = p.HandleSignal(w)
+			continue
+		case m.AttemptID != s.attempt:
+			s.mu.Unlock()
+			continue
 		}
+		s.mu.Unlock()
+		s.handle(m)
+	}
+}
+
+func (s *signaling) handle(m sigMsg) {
+	switch m.Kind {
+	case "tls_fingerprint":
+		var p struct {
+			SHA256 string `json:"sha256"`
+		}
+		if json.Unmarshal(m.Payload, &p) == nil {
+			select {
+			case s.tlsFP <- p.SHA256:
+			default:
+			}
+		}
+	case "answer", "ice_candidate", "ice_complete":
+		var w webrtc.Signal
+		if json.Unmarshal(m.Payload, &w) != nil {
+			return
+		}
+		w.Type = m.Kind
+		s.mu.Lock()
+		if s.peer == nil {
+			s.queue = append(s.queue, w)
+			s.mu.Unlock()
+			return
+		}
+		p := s.peer
+		s.mu.Unlock()
+		_ = p.HandleSignal(w)
 	}
 }
 
