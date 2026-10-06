@@ -5,8 +5,11 @@ go 1.26.0
 toolchain go1.27.2
 
 require (
+	github.com/coder/websocket v1.8.15
 	github.com/creack/pty v1.1.24
+	github.com/pion/webrtc/v4 v4.2.23
 	github.com/rohansen856/connrelay/core/prwcore v0.0.0-00010101000000-000000000000
+	rsc.io/qr v0.2.0
 )
 
 require (
@@ -27,7 +30,6 @@ require (
 	github.com/pion/stun/v4 v4.0.1 // indirect
 	github.com/pion/transport/v5 v5.1.1 // indirect
 	github.com/pion/turn/v5 v5.1.2 // indirect
-	github.com/pion/webrtc/v4 v4.2.23 // indirect
 	github.com/wlynxg/anet v0.0.5 // indirect
 	golang.org/x/crypto v0.58.0 // indirect
 	golang.org/x/net v0.61.0 // indirect
