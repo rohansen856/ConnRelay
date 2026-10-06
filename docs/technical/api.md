@@ -581,6 +581,20 @@ Rules shared by all WebSocket endpoints:
 
 The control channel can never carry terminal operations. Any message type outside the allowlist is dropped and audited.
 
+### Message envelope
+
+Every WebSocket text message is one JSON object. Routing fields sit at the top level and the body sits under `payload`:
+
+```json
+{"type": "signal", "attempt_id": "…", "kind": "offer", "from_device_id": "…", "payload": {"sdp": "…"}}
+{"type": "auth.response", "payload": {"device_id": "…", "sig": "…", "agent_version": "0.1.0"}}
+{"type": "attempt.status", "attempt_id": "…", "payload": {"status": "connected_direct", "path_type": "direct"}}
+{"type": "grant.lease", "lease": "<EdDSA JWS, typ prw-lease+jwt>"}
+```
+
+- **Signaling** uses `type: "signal"` with `kind` set to `offer`, `answer`, `ice_candidate`, `ice_complete`, `tls_fingerprint` or `attempt_cancel`. The server sets `from_device_id` from the socket.
+- **Early messages for a phone.** Host messages sent to a phone that has not yet opened its signaling socket are buffered for up to 15 s (32 messages per attempt). Clients should still open `/v1/signaling` *before* `POST /v1/connections`.
+
 ### Limits
 
 | Scope | Limit |
