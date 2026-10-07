@@ -28,9 +28,7 @@ import (
 
 	"github.com/rohansen856/connrelay/core/prwcore/attest"
 	"github.com/rohansen856/connrelay/core/prwcore/client"
-	"github.com/rohansen856/connrelay/core/prwcore/control"
-	"github.com/rohansen856/connrelay/core/prwcore/flow"
-	"github.com/rohansen856/connrelay/core/prwcore/frame"
+	"github.com/rohansen856/connrelay/core/prwcore/termclient"
 	"github.com/rohansen856/connrelay/core/prwcore/transport"
 	"github.com/rohansen856/connrelay/services/control/internal/config"
 	"github.com/rohansen856/connrelay/services/control/internal/dbtest"
@@ -233,138 +231,45 @@ func (w *world) waitOnline(p *phone, host string) {
 	w.t.Fatal("agent never came online")
 }
 
-// ---- terminal protocol (phone side) ----
+// ---- terminal (phone side, via prwcore/termclient) ----
 
-type term struct {
+type screen struct {
 	t      *testing.T
-	c      transport.Conn
 	mu     sync.Mutex
-	ctl    chan *control.Envelope
 	out    bytes.Buffer
-	recv   *flow.Receiver
-	in     *flow.Sender
-	stream uint16
 	closed chan struct{}
+	once   sync.Once
 }
 
-func newTerm(t *testing.T, c transport.Conn) *term {
-	tm := &term{t: t, c: c, ctl: make(chan *control.Envelope, 32), recv: flow.NewReceiver(flow.DefaultOutputWindow),
-		in: flow.NewSender(flow.DefaultInputWindow), closed: make(chan struct{})}
-	go tm.loop()
-	return tm
-}
+func newScreen(t *testing.T) *screen { return &screen{t: t, closed: make(chan struct{})} }
 
-func (tm *term) loop() {
-	defer close(tm.closed)
-	for {
-		f, err := tm.c.Recv()
-		if err != nil {
-			return
-		}
-		switch f.Type {
-		case frame.TypeControl:
-			env, err := control.Decode(f)
-			if err != nil {
-				return
-			}
-			if env.Type == control.TypeFlowCredit {
-				var fc control.FlowCredit
-				_ = env.Unmarshal(&fc)
-				_ = tm.in.Grant(fc.Bytes)
-				continue
-			}
-			tm.ctl <- env
-		case frame.TypeOutput:
-			tm.mu.Lock()
-			tm.out.Write(f.Payload)
-			tm.mu.Unlock()
-			_ = tm.recv.Received(len(f.Payload))
-			if g := tm.recv.Consumed(len(f.Payload)); g > 0 {
-				tm.send(control.TypeFlowCredit, control.FlowCredit{StreamID: f.StreamID, Bytes: g})
-			}
-		}
+func (s *screen) Output(_ uint16, b []byte) { s.mu.Lock(); s.out.Write(b); s.mu.Unlock() }
+func (s *screen) Event(kind, _ string) {
+	if kind == "closed" {
+		s.once.Do(func() { close(s.closed) })
 	}
 }
 
-func (tm *term) send(typ string, payload any) {
-	env, _ := control.New(typ, payload)
-	f, _ := env.Frame()
-	_ = tm.c.Send(f)
-}
-
-func (tm *term) expect(typ string) *control.Envelope {
-	tm.t.Helper()
-	for {
-		select {
-		case env := <-tm.ctl:
-			if env.Type == typ {
-				return env
-			}
-			if env.Type == control.TypeTerminalError {
-				tm.t.Fatalf("terminal.error %s", env.Payload)
-			}
-		case <-time.After(15 * time.Second):
-			tm.t.Fatalf("timeout waiting for %s", typ)
-		}
-	}
-}
-
-func (tm *term) ready(env *control.Envelope) string {
-	var r struct {
-		Session  string `json:"terminal_session_id"`
-		StreamID uint16 `json:"stream_id"`
-	}
-	_ = json.Unmarshal(env.Payload, &r)
-	tm.stream = r.StreamID
-	tm.send(control.TypeFlowCredit, control.FlowCredit{StreamID: r.StreamID, Bytes: tm.recv.Initial()})
-	return r.Session
-}
-
-func (tm *term) open() string {
-	tm.send(control.TypeTerminalOpen, map[string]any{"cols": 100, "rows": 30})
-	return tm.ready(tm.expect(control.TypeTerminalReady))
-}
-
-func (tm *term) attach(id string) {
-	tm.send(control.TypeTerminalAttach, map[string]any{"terminal_session_id": id, "cols": 100, "rows": 30})
-	tm.ready(tm.expect(control.TypeTerminalReady))
-}
-
-func (tm *term) typeText(s string) {
-	b := []byte(s)
-	for len(b) > 0 {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		n, err := tm.in.Acquire(ctx, len(b))
-		cancel()
-		if err != nil {
-			tm.t.Fatalf("no input credit: %v", err)
-		}
-		if err := tm.c.Send(&frame.Frame{Type: frame.TypeInput, StreamID: tm.stream, Payload: b[:n]}); err != nil {
-			tm.t.Fatal(err)
-		}
-		b = b[n:]
-	}
-}
-
-func (tm *term) waitFor(re *regexp.Regexp) []string {
-	tm.t.Helper()
+func (s *screen) waitFor(re *regexp.Regexp) []string {
+	s.t.Helper()
 	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
-		tm.mu.Lock()
-		m := re.FindStringSubmatch(tm.out.String())
-		tm.mu.Unlock()
+		s.mu.Lock()
+		m := re.FindStringSubmatch(s.out.String())
+		s.mu.Unlock()
 		if m != nil {
 			return m
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	tm.t.Fatalf("output never matched %s", re)
+	s.t.Fatalf("output never matched %s", re)
 	return nil
 }
 
 // ---- the test ----
 
 func TestFullSystem(t *testing.T) {
+	start := time.Now()
 	w := newWorld(t)
 	p := w.signIn()
 	host, fp := w.pair(p)
@@ -378,38 +283,53 @@ func TestFullSystem(t *testing.T) {
 	}
 
 	// 2. Direct WebRTC: open a tmux shell and run a command.
-	conn, res, err := client.Connect(context.Background(), p.cfg("webrtc"), target)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	conn, res, err := client.Connect(ctx, p.cfg("webrtc"), target)
 	if err != nil {
 		t.Fatalf("connect (webrtc): %v", err)
 	}
 	t.Logf("connected: path=%s in %d ms", res.Path, res.Report.ElapsedMS)
-	tm := newTerm(t, conn)
-	session := tm.open()
-	tm.waitFor(regexp.MustCompile(`\$ `))
-	tm.typeText("MARK=e2e; echo PID=$$ RESULT-$((6*7))\r")
-	m := tm.waitFor(regexp.MustCompile(`PID=(\d+) RESULT-42`))
+	scr := newScreen(t)
+	tc := termclient.New(conn, scr)
+	sess, err := tc.Open(ctx, 100, 30)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	scr.waitFor(regexp.MustCompile(`\$ `))
+	_ = tc.Input(ctx, sess.StreamID, []byte("MARK=e2e; echo PID=$$ RESULT-$((6*7))\r"))
+	m := scr.waitFor(regexp.MustCompile(`PID=(\d+) RESULT-42`))
 	pid := m[1]
 	if _, a, _ := w.call("GET", "/v1/connections/"+res.AttemptID, p.access, nil); a["status"] != "connected_direct" {
 		t.Fatalf("attempt status %v", a)
 	}
-	conn.Close() // the phone loses its connection
+	t.Logf("step 2 done at %v", time.Since(start))
+	tc.Close() // the phone loses its connection
+	t.Logf("closed at %v", time.Since(start))
+	session := sess.ID
 
 	// 3. Reconnect over the WSS relay (inner TLS) and re-attach the same shell.
-	conn2, res2, err := client.Connect(context.Background(), p.cfg("wss"), target)
+	conn2, res2, err := client.Connect(ctx, p.cfg("wss"), target)
 	if err != nil {
 		t.Fatalf("connect (wss): %v", err)
 	}
+	t.Logf("wss connected at %v (%+v)", time.Since(start), res2.Report)
 	if res2.Path != transport.PathWSSRelay {
 		t.Fatalf("path %s", res2.Path)
 	}
-	tm2 := newTerm(t, conn2)
-	tm2.attach(session)
-	tm2.typeText("echo AGAIN=$$:$MARK\r")
-	m = tm2.waitFor(regexp.MustCompile(`AGAIN=(\d+):(\w+)`))
+	scr2 := newScreen(t)
+	tc2 := termclient.New(conn2, scr2)
+	s2, err := tc2.Attach(ctx, session, 100, 30)
+	if err != nil || !s2.Resumed {
+		t.Fatalf("attach: %+v %v", s2, err)
+	}
+	_ = tc2.Input(ctx, s2.StreamID, []byte("echo AGAIN=$$:$MARK\r"))
+	m = scr2.waitFor(regexp.MustCompile(`AGAIN=(\d+):(\w+)`))
 	if m[1] != pid || m[2] != "e2e" {
 		t.Fatalf("reattached to a different shell: %v (pid %s)", m, pid)
 	}
 
+	t.Logf("step 3 done at %v", time.Since(start))
 	// 4. Revoke the grant: the host drops the phone, and new attempts fail.
 	_, grants, _ := w.call("GET", "/v1/access-grants?state=active", p.access, nil)
 	g := grants["items"].([]any)[0].(map[string]any)
@@ -418,11 +338,13 @@ func TestFullSystem(t *testing.T) {
 	if code != 200 {
 		t.Fatalf("revoke: %d", code)
 	}
+	t.Logf("revoked at %v", time.Since(start))
 	select {
-	case <-tm2.closed:
+	case <-scr2.closed:
 	case <-time.After(30 * time.Second):
 		t.Fatal("host did not drop the revoked phone within 30 s")
 	}
+	t.Logf("host dropped phone at %v", time.Since(start))
 	if _, _, err := client.Connect(context.Background(), p.cfg("wss"), target); err == nil {
 		t.Fatal("connected after revocation")
 	} else if ae, ok := err.(*client.APIError); !ok || ae.Code != "access_grant_missing" {
