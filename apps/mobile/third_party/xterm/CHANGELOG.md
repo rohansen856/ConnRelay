@@ -275,3 +275,9 @@
 [#186]: https://github.com/TerminalStudio/xterm.dart/pull/186
 [#190]: https://github.com/TerminalStudio/xterm.dart/pull/190
  
+
+## 4.0.0-prw.1 (vendored fork for Private Remote Workspace)
+
+* Fix: arrow keys now honour application cursor mode (DECCKM, `ESC [ ? 1 h`).
+  `core/input/handler.dart` passed `appKeypadMode` where `cursorKeysMode`
+  belongs, so vim, less and htop received `ESC [ A` instead of `ESC O A`.
