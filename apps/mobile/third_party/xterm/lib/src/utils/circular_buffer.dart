@@ -26,11 +26,25 @@ class IndexAwareCircularBuffer<T extends IndexedItem> {
     return (_startIndex + index) % _array.length;
   }
 
+  /// Detaches the item stored at [cyclicIndex] only if it really lives at
+  /// logical [index] of this buffer. A slot can hold a stale reference to an
+  /// item that has since been re-adopted elsewhere (prw fork fix: detaching
+  /// such an alias detached a live line and later tripped `_move`).
+  @pragma('vm:prefer-inline')
+  void _evict(int cyclicIndex, int index) {
+    final occupant = _array[cyclicIndex];
+    if (occupant != null &&
+        identical(occupant._owner, this) &&
+        occupant._absoluteIndex == _absoluteStartIndex + index) {
+      occupant._detach();
+    }
+  }
+
   /// Removes the element at [index] from the list.
   @pragma('vm:prefer-inline')
   void _dropChild(int index) {
     final cyclicIndex = _getCyclicIndex(index);
-    _array[cyclicIndex]?._detach();
+    _evict(cyclicIndex, index);
     _array[cyclicIndex] = null;
   }
 
@@ -38,7 +52,7 @@ class IndexAwareCircularBuffer<T extends IndexedItem> {
   @pragma('vm:prefer-inline')
   void _adoptChild(int index, T child) {
     final cyclicIndex = _getCyclicIndex(index);
-    _array[cyclicIndex]?._detach();
+    if (!identical(_array[cyclicIndex], child)) _evict(cyclicIndex, index);
     _array[cyclicIndex] = child.._attach(this, index);
   }
 
@@ -48,8 +62,9 @@ class IndexAwareCircularBuffer<T extends IndexedItem> {
   void _moveChild(int fromIndex, int toIndex) {
     final fromCyclicIndex = _getCyclicIndex(fromIndex);
     final toCyclicIndex = _getCyclicIndex(toIndex);
-    _array[toCyclicIndex]?._detach();
-    _array[toCyclicIndex] = _array[fromCyclicIndex]?.._move(toIndex);
+    final moving = _array[fromCyclicIndex];
+    if (!identical(_array[toCyclicIndex], moving)) _evict(toCyclicIndex, toIndex);
+    _array[toCyclicIndex] = moving?.._move(toIndex);
     _array[fromCyclicIndex] = null;
   }
 
@@ -224,6 +239,9 @@ class IndexAwareCircularBuffer<T extends IndexedItem> {
   /// instead just adjusts the start index and length.
   void trimStart(int count) {
     if (count > _length) count = _length;
+    for (var i = 0; i < count; i++) {
+      _dropChild(i); // do not leave stale references behind
+    }
     _startIndex += count;
     _startIndex %= _array.length;
     _length -= count;
@@ -231,6 +249,7 @@ class IndexAwareCircularBuffer<T extends IndexedItem> {
 
   /// Replaces all elements in the list with [replacement].
   void replaceWith(List<T> replacement) {
+    final oldLength = _length;
     for (var i = 0; i < _length; i++) {
       _dropChild(i);
     }
@@ -251,6 +270,11 @@ class IndexAwareCircularBuffer<T extends IndexedItem> {
 
     _startIndex = 0;
     _length = copyLength;
+    // Clear slots past the new end: they may still reference items that the
+    // replacement re-adopted at other positions.
+    for (var i = copyLength; i < oldLength && i < _array.length; i++) {
+      _array[i] = null;
+    }
   }
 
   /// Replaces the element at [index] with [value] and returns the replaced

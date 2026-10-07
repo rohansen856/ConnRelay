@@ -281,3 +281,9 @@
 * Fix: arrow keys now honour application cursor mode (DECCKM, `ESC [ ? 1 h`).
   `core/input/handler.dart` passed `appKeypadMode` where `cursorKeysMode`
   belongs, so vim, less and htop received `ESC [ A` instead of `ESC O A`.
+* Fix: `IndexAwareCircularBuffer` could detach a live line through a stale
+  slot reference and then assert in `_move` on a later scroll-region line
+  feed; release builds silently corrupted lines. Seen with Codex's TUI;
+  minimal reproducer: `ESC M`, `ESC [1;7r`, then 7 line feeds. Only genuine
+  occupants are detached now, and `replaceWith`/`trimStart` clear stale
+  slots.
