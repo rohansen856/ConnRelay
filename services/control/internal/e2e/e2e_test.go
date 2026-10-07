@@ -28,6 +28,7 @@ import (
 
 	"github.com/rohansen856/connrelay/core/prwcore/attest"
 	"github.com/rohansen856/connrelay/core/prwcore/client"
+	"github.com/rohansen856/connrelay/core/prwcore/mobile"
 	"github.com/rohansen856/connrelay/core/prwcore/termclient"
 	"github.com/rohansen856/connrelay/core/prwcore/transport"
 	"github.com/rohansen856/connrelay/services/control/internal/config"
@@ -354,5 +355,61 @@ func TestFullSystem(t *testing.T) {
 	out, err := exec.Command("tmux", "-S", filepath.Join(w.dir, "run", "prw", "tmux.sock"), "list-sessions").CombinedOutput()
 	if err != nil || !strings.Contains(string(out), "prw-"+session) {
 		t.Fatalf("session gone after revocation: %v %s", err, out)
+	}
+}
+
+// ---- the gomobile facade, as the app uses it ----
+
+type goSigner struct{ s *attest.SoftwareSigner }
+
+func (g goSigner) PublicKeySPKI() ([]byte, error)   { return g.s.PublicKeySPKI(), nil }
+func (g goSigner) SignDER(d []byte) ([]byte, error) { return g.s.SignDER(d) }
+
+type appEvents struct{ screen *screen }
+
+func (a appEvents) OnOutput(_ int, b []byte)    { a.screen.Output(0, b) }
+func (a appEvents) OnEvent(kind, detail string) { a.screen.Event(kind, detail) }
+
+func TestMobileFacade(t *testing.T) {
+	w := newWorld(t)
+	p := w.signIn()
+	host, fp := w.pair(p)
+	w.startAgent()
+	w.waitOnline(p, host)
+
+	scr := newScreen(t)
+	sess, err := mobile.Connect(w.url, p.access, p.id, host, fp, "auto", 30000, goSigner{p.key}, appEvents{scr})
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	opened, err := sess.Open(100, 30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var o struct {
+		ID     string `json:"terminal_session_id"`
+		Stream int    `json:"stream_id"`
+	}
+	_ = json.Unmarshal([]byte(opened), &o)
+	scr.waitFor(regexp.MustCompile(`\$ `))
+	if err := sess.Input(o.Stream, []byte("echo FROM-APP-$((40+2))\r")); err != nil {
+		t.Fatal(err)
+	}
+	scr.waitFor(regexp.MustCompile(`FROM-APP-42`))
+	list, err := sess.List()
+	if err != nil || !strings.Contains(list, o.ID) {
+		t.Fatalf("list: %s %v", list, err)
+	}
+	if _, err := sess.Attach("not-a-session", 80, 24); err == nil || err.Error() != "session_not_found" {
+		t.Fatalf("attach unknown: %v", err)
+	}
+	sess.Close()
+	select {
+	case <-scr.closed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("no closed event")
+	}
+	if _, err := mobile.Connect(w.url, p.access, p.id, host, strings.Repeat("a", 64), "auto", 30000, goSigner{p.key}, appEvents{newScreen(t)}); err == nil || err.Error() != "host_key_mismatch" {
+		t.Fatalf("pin mismatch: %v", err)
 	}
 }
