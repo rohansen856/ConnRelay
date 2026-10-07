@@ -29,6 +29,8 @@ jobs:
       - name: vet
         run: make vet
       - name: test (race)
+        env:
+          PRW_REQUIRE_DB: "1"   # database tests must run, never skip
         run: make test-race
       - name: govulncheck
         run: |
