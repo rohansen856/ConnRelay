@@ -57,7 +57,7 @@ up() {
   (cd "$root" && go build -o "$home/prw-control" ./services/control/cmd/prw-control)
   allowed=$( (grep -E '^google:' "$home/allowed_subjects" || true) | paste -sd, -)
   [[ -n $allowed ]] || allowed="google:nobody-yet"   # sign in once; the denied subject is logged
-  PRW_PUBLIC_BASE_URL="$url" PRW_LISTEN_ADDR="127.0.0.1:$port" \
+  PRW_LOG_LEVEL=${PRW_LOG_LEVEL:-debug} PRW_PUBLIC_BASE_URL="$url" PRW_LISTEN_ADDR="127.0.0.1:$port" \
   PRW_DATABASE_URL_FILE="$home/secrets/database_url" PRW_GOOGLE_CLIENT_IDS="$webid" PRW_ALLOWED_SUBJECTS="$allowed" \
   PRW_ACCESS_SIGNING_KEY_FILE="$home/secrets/access_signing_key.pem" PRW_TICKET_SIGNING_KEY_FILE="$home/secrets/ticket_signing_key.pem" \
   PRW_PAIRING_HMAC_KEY_FILE="$home/secrets/pairing_hmac_key" PRW_TURN_SHARED_SECRET_FILE="$home/secrets/turn_shared_secret" \
