@@ -9,6 +9,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -54,6 +55,9 @@ type Service struct {
 	Nonces *nonce.Store
 	Tokens *tokens.Manager
 	Now    func() time.Time
+	// Log, when set, records denied subjects so the operator can add their
+	// own account to PRW_ALLOWED_SUBJECTS (the audit row keeps only a hash).
+	Log *slog.Logger
 }
 
 func (s *Service) now() time.Time {
@@ -181,6 +185,10 @@ func (s *Service) Exchange(ctx context.Context, req ExchangeRequest, requestID, 
 	// 1-2. Google token, then the allowlist (before any account row exists).
 	id, err := s.Google.Verify(ctx, req.IDToken, req.OIDCNonce)
 	if errors.Is(err, google.ErrNotAllowed) {
+		if s.Log != nil {
+			s.Log.Warn("sign-in denied: subject not in PRW_ALLOWED_SUBJECTS; add it if this is you",
+				"subject", "google:"+id.Subject, "request_id", requestID)
+		}
 		_ = store.WriteAudit(ctx, s.Store.Pool, store.Audit{ActorKind: "anonymous", EventType: "login_denied",
 			Outcome: "denied", ReasonCode: "account_not_allowed", RequestID: requestID,
 			Metadata: map[string]any{"subject_hash": SubjectHash(id.Subject)}})

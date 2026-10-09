@@ -57,7 +57,7 @@ func New(cfg *config.Config, pool *pgxpool.Pool, verifier auth.IDTokenVerifier, 
 		wsBase = "ws://" + strings.TrimPrefix(cfg.PublicBaseURL, "http://")
 	}
 
-	a := &auth.Service{Store: st, Google: verifier, Nonces: nonce.New(2*time.Minute, 100000),
+	a := &auth.Service{Store: st, Google: verifier, Log: log, Nonces: nonce.New(2*time.Minute, 100000),
 		Tokens: &tokens.Manager{Issuer: token.Issuer{KID: accessKID, Key: cfg.AccessKey}, Keys: token.KeySet{accessKID: accessPub}, ISS: cfg.PublicBaseURL}}
 	h := &hub.Hub{Store: st, Auth: a, Ticket: ticket, Log: log, JWKS: func() any { return map[string]any{"keys": jwk()} }}
 	w := &outbox.Worker{Store: st, Hub: h, Log: log}
