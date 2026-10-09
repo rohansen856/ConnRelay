@@ -362,3 +362,25 @@ func TestRevocationReachesAgent(t *testing.T) {
 		t.Fatalf("revoked host login: %v", m)
 	}
 }
+
+func TestSilentAgentIsDropped(t *testing.T) {
+	e := setup(t)
+	e.hub.Silence = 400 * time.Millisecond
+	p := e.SignIn("owner")
+	h := e.AddHost(p.Account, "box")
+	a := e.agent(h, h.Key)
+	a.expect("auth.ok")
+	if !e.hub.Connected(h.ID) {
+		t.Fatal("not connected after login")
+	}
+	// The agent goes quiet (half-open socket): the server must give up on it.
+	if !a.closed() {
+		t.Fatal("silent agent socket stayed open")
+	}
+	for i := 0; e.hub.Connected(h.ID); i++ {
+		if i > 100 {
+			t.Fatal("silent agent still counted as connected")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}

@@ -26,7 +26,11 @@ import (
 
 // Timings and limits (proposed values).
 const (
-	LeaseTTL         = 10 * time.Minute
+	LeaseTTL = 10 * time.Minute
+	// AgentSilence: agents heartbeat every 25 s; a socket silent for longer
+	// than this is dead (half-open) and is closed so presence goes stale and
+	// the agent's reconnect replaces it.
+	AgentSilence     = 75 * time.Second
 	LeaseRenew       = 3 * time.Minute
 	AuthTimeout      = 10 * time.Second
 	MaxFrame         = 64 << 10
@@ -65,6 +69,8 @@ type Hub struct {
 	JWKS   func() any   // {"keys":[...]} for auth.ok
 	Log    *slog.Logger
 	Nonces *nonce.Store
+	// Silence overrides AgentSilence (tests).
+	Silence time.Duration
 	// OnAttemptStatus is called for agent attempt.status reports.
 	OnAttemptStatus func(ctx context.Context, host uuid.UUID, attemptID uuid.UUID, status, path, failure string)
 
@@ -379,9 +385,16 @@ func (h *Hub) ServeAgent(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
+	silence := h.Silence
+	if silence == 0 {
+		silence = AgentSilence
+	}
 	for {
-		m, err := read(ctx, ws, 0)
+		m, err := read(ctx, ws, silence)
 		if err != nil {
+			if ctx.Err() == nil {
+				_ = ws.Close(websocket.StatusCode(4408), "no heartbeat")
+			}
 			return
 		}
 		switch m.Type {
