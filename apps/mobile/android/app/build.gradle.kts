@@ -6,7 +6,7 @@ plugins {
 }
 
 android {
-    namespace = "dev.prw.prw"
+    namespace = "dev.prw.app"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
 
@@ -21,10 +21,10 @@ android {
 
     defaultConfig {
         // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
-        applicationId = "dev.prw.prw"
+        applicationId = "dev.prw.app"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
-        minSdk = flutter.minSdkVersion
+        minSdk = 26
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
@@ -37,6 +37,11 @@ android {
             signingConfig = signingConfigs.getByName("debug")
         }
     }
+}
+
+dependencies {
+    // Shared Go core, built by ../gocore/build-aar.sh (gomobile).
+    implementation(files("libs/prwcore.aar"))
 }
 
 flutter {
