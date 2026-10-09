@@ -19,13 +19,16 @@ Map<String, dynamic> host(String id, String name, String presence, {bool granted
       'my_grant': granted ? {'id': 'g-$id', 'phone_device_id': 'p', 'host_device_id': id, 'version': 1} : null,
     };
 
-Widget app(MemoryStore kv, List<Map<String, dynamic>> devices) => ProviderScope(overrides: [
+/// [onFetch] runs on every API call; a non-null response replaces the default.
+Widget app(MemoryStore kv, List<Map<String, dynamic>> devices, {http.Response? Function()? onFetch}) => ProviderScope(overrides: [
       configProvider.overrideWithValue(const AppConfig(apiBase: 'https://api.test', googleServerClientId: 'web')),
       sessionStoreProvider.overrideWithValue(SessionStore(kv)),
       nativeCoreProvider.overrideWithValue(FakeCore()),
       idTokenProvider.overrideWithValue(FakeIdTokens()),
       apiProvider.overrideWithValue(ApiClient('https://api.test',
-          httpClient: MockClient((r) async => http.Response(jsonEncode({'items': devices, 'next_cursor': null}), 200)))),
+          httpClient: MockClient((r) async {
+        return onFetch?.call() ?? http.Response(jsonEncode({'items': devices, 'next_cursor': null}), 200);
+      }))),
     ], child: const PrwApp());
 
 void main() {
@@ -64,5 +67,40 @@ void main() {
     await t.pumpAndSettle();
     expect(find.text('Add your first computer'), findsOneWidget);
     expect(find.textContaining('prw-agent pair'), findsOneWidget);
+  });
+
+  testWidgets('devices: pull to refresh works for short, empty and failed lists', (t) async {
+    // A tall phone screen (1080x2392 at 2.75x), where a short list leaves
+    // most of the viewport empty.
+    t.view.physicalSize = const Size(1080, 2392);
+    t.view.devicePixelRatio = 2.75;
+    addTearDown(t.view.reset);
+    for (final (devices, failFirst) in [
+      (<Map<String, dynamic>>[], false),
+      ([host('h1', 'workstation', 'online')], false),
+      ([host('h1', 'workstation', 'online')], true), // first load fails: the error view must be pullable
+    ]) {
+      final kv = MemoryStore();
+      await SessionStore(kv).save(Session(accountId: 'a', deviceId: 'p', accessToken: 't', refreshToken: 'r'));
+      var fetches = 0;
+      await t.pumpWidget(app(kv, devices, onFetch: () {
+        fetches++;
+        return failFirst && fetches == 1
+            ? http.Response(jsonEncode({'code': 'unavailable', 'message': 'down'}), 503)
+            : null;
+      }));
+      await t.pumpAndSettle();
+      final before = fetches;
+      // A slow pull from near the top of the list, like a finger.
+      final g = await t.startGesture(t.getTopLeft(find.byType(Scrollable).first) + const Offset(150, 40));
+      for (var i = 0; i < 20; i++) {
+        await g.moveBy(const Offset(0, 20));
+        await t.pump(const Duration(milliseconds: 16));
+      }
+      await g.up();
+      await t.pumpAndSettle();
+      expect(fetches, greaterThan(before), reason: 'pull did not refetch (${devices.length} devices, failFirst=$failFirst)');
+      if (devices.isNotEmpty) expect(find.text('workstation'), findsOneWidget);
+    }
   });
 }

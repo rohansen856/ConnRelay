@@ -24,16 +24,24 @@ class DevicesScreen extends ConsumerWidget {
       ),
       body: RefreshIndicator(
         onRefresh: () => ref.refresh(devicesProvider.future),
+        // Every state must be scrollable, or the pull gesture never starts
+        // (a short list does not fill the screen).
         child: devices.when(
-          loading: () => const Center(child: CircularProgressIndicator()),
-          error: (e, _) => ErrorView(
-              title: 'Could not load your computers',
-              detail: e is ApiException ? e.message : 'Check your connection.',
-              onAction: () => ref.invalidate(devicesProvider)),
+          loading: () => ListView(physics: const AlwaysScrollableScrollPhysics(), children: const [
+            SizedBox(height: 160),
+            Center(child: CircularProgressIndicator()),
+          ]),
+          error: (e, _) => ListView(physics: const AlwaysScrollableScrollPhysics(), children: [
+            const SizedBox(height: 80),
+            ErrorView(
+                title: 'Could not load your computers',
+                detail: e is ApiException ? e.message : 'Check your connection.',
+                onAction: () => ref.invalidate(devicesProvider)),
+          ]),
           data: (list) {
             final hosts = list.where((d) => d.isHost && !d.revoked).toList();
             if (hosts.isEmpty) {
-              return ListView(children: const [
+              return ListView(physics: const AlwaysScrollableScrollPhysics(), children: const [
                 SizedBox(height: 120),
                 Icon(Icons.computer, size: 56),
                 SizedBox(height: 12),
@@ -47,6 +55,7 @@ class DevicesScreen extends ConsumerWidget {
               ]);
             }
             return ListView.separated(
+              physics: const AlwaysScrollableScrollPhysics(),
               itemCount: hosts.length,
               separatorBuilder: (_, _) => const Divider(height: 1),
               itemBuilder: (_, i) => _HostTile(hosts[i]),
