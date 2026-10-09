@@ -1,12 +1,21 @@
+import 'dart:async';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api.dart';
 import '../../core/auth.dart';
 
+/// How often a watched device list refetches, so presence and "seen X ago"
+/// do not freeze while the screen stays open.
+const devicesPollInterval = Duration(seconds: 30);
+
 /// All devices of the account (hosts first).
 final devicesProvider = FutureProvider.autoDispose<List<Device>>((ref) async {
   final api = ref.watch(apiProvider);
   ref.watch(authProvider); // refetch on sign-in changes
+  // Polls only while watched (autoDispose), and also retries after an error.
+  final poll = Timer(devicesPollInterval, ref.invalidateSelf);
+  ref.onDispose(poll.cancel);
   final out = <Device>[];
   String? cursor;
   do {
@@ -28,18 +37,19 @@ final deviceProvider = FutureProvider.autoDispose.family<Device, String>((ref, i
 
 /// Grants this phone access to a host.
 Future<void> grantAccess(ApiClient api, String phoneId, String hostId) => api.post('/v1/access-grants', {
-      'phone_device_id': phoneId,
-      'host_device_id': hostId,
-      'capabilities': ['terminal'],
-    });
+  'phone_device_id': phoneId,
+  'host_device_id': hostId,
+  'capabilities': ['terminal'],
+});
 
 Future<void> revokeGrant(ApiClient api, Grant g) =>
     api.post('/v1/access-grants/${g.id}/revoke', null, {'If-Match': '"${g.version}"'});
 
 Future<void> revokeDevice(ApiClient api, Device d, String reason, {bool confirmLastPhone = false}) => api.post(
-    '/v1/devices/${d.id}/revoke${confirmLastPhone ? '?confirm_last_phone=true' : ''}',
-    {'reason': reason},
-    {'If-Match': '"${d.version}"'});
+  '/v1/devices/${d.id}/revoke${confirmLastPhone ? '?confirm_last_phone=true' : ''}',
+  {'reason': reason},
+  {'If-Match': '"${d.version}"'},
+);
 
 String relativeTime(DateTime? t) {
   if (t == null) return 'never';
