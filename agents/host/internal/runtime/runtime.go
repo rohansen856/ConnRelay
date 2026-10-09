@@ -36,7 +36,11 @@ var Version = "0.1.0"
 
 // Timings.
 const (
-	Heartbeat     = 25 * time.Second
+	Heartbeat = 25 * time.Second
+	// SilenceLimit: the server acknowledges every heartbeat, so hearing
+	// nothing for this long means the socket is dead even if writes still
+	// "succeed" (half-open TCP through a NAT remap or a proxy).
+	SilenceLimit  = 3 * Heartbeat
 	MaxPeers      = 8
 	ConnectWindow = 30 * time.Second
 )
@@ -51,8 +55,10 @@ type Agent struct {
 	Terms *termserver.Server
 	Log   *slog.Logger
 	HTTP  *http.Client
-	// TLSIdentity and IncludeLoopback exist for tests.
+	// IncludeLoopback exists for tests.
 	IncludeLoopback bool
+	// Silence overrides SilenceLimit (tests).
+	Silence time.Duration
 
 	keys  token.KeySet
 	lease *lease.Cache
@@ -81,6 +87,13 @@ type msg struct {
 	Lease     string          `json:"lease,omitempty"`
 	Scope     string          `json:"scope,omitempty"`
 	Payload   json.RawMessage `json:"payload,omitempty"`
+}
+
+func (a *Agent) silenceLimit() time.Duration {
+	if a.Silence > 0 {
+		return a.Silence
+	}
+	return SilenceLimit
 }
 
 // Run keeps the agent connected until ctx ends or the host is revoked.
@@ -151,7 +164,12 @@ func (a *Agent) session(ctx context.Context) error {
 	ws.SetReadLimit(64 << 10)
 	defer ws.CloseNow()
 	read := func() (msg, error) {
-		_, b, err := ws.Read(ctx)
+		rctx, cancel := context.WithTimeout(ctx, a.silenceLimit())
+		defer cancel()
+		_, b, err := ws.Read(rctx)
+		if err != nil && rctx.Err() == context.DeadlineExceeded && ctx.Err() == nil {
+			return msg{}, errors.New("control socket silent; reconnecting")
+		}
 		if err != nil {
 			if websocket.CloseStatus(err) == 4403 {
 				return msg{}, ErrRevoked
