@@ -1,6 +1,8 @@
 package server_test
 
 import (
+	"bytes"
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"io"
@@ -8,9 +10,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/coder/websocket"
 	"github.com/rohansen856/connrelay/services/control/internal/config"
 	"github.com/rohansen856/connrelay/services/control/internal/dbtest"
 	"github.com/rohansen856/connrelay/services/control/internal/google"
@@ -67,3 +72,54 @@ func TestAssembledServer(t *testing.T) {
 		t.Fatal("challenge endpoint never rate limited")
 	}
 }
+
+// With debug logging on, requests are logged (status included) and the
+// wrapped writer still lets WebSocket upgrades through.
+func TestAccessLog(t *testing.T) {
+	pool := dbtest.New(t)
+	_, ak, _ := ed25519.GenerateKey(rand.Reader)
+	_, tk, _ := ed25519.GenerateKey(rand.Reader)
+	cfg := &config.Config{PublicBaseURL: "https://api.test.invalid", AccessKey: ak, TicketKey: tk,
+		TicketKeyIDs: []string{config.KeyID(tk.Public().(ed25519.PublicKey))}, PairingPepper: make([]byte, 32),
+		TURNSecret: make([]byte, 32), TURNURLs: []string{"turn:t.invalid:3478"}, RelayMaxBPS: 250000, RelayMaxBytes: 1 << 30}
+	iss := googletest.New(t, google.Issuer)
+	gv, _ := google.NewWithKeySet(google.Issuer, iss.KeySet(), []string{"c"}, []string{"owner"}, time.Now)
+	var buf safeBuffer
+	srv := server.New(cfg, pool, gv, slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	ts := httptest.NewServer(srv.Handler)
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/v1/devices?cursor=secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	ws, _, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(ts.URL, "http")+"/v1/agent/control",
+		&websocket.DialOptions{Subprotocols: []string{"prw.v1"}})
+	if err != nil {
+		t.Fatalf("websocket upgrade through access log: %v", err)
+	}
+	ws.CloseNow()
+
+	out := buf.String()
+	if !strings.Contains(out, `"path":"/v1/devices","status":401`) {
+		t.Errorf("request not logged:\n%s", out)
+	}
+	if strings.Contains(out, "secret") {
+		t.Error("query string leaked into the log")
+	}
+}
+
+type safeBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (s *safeBuffer) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Write(p)
+}
+func (s *safeBuffer) String() string { s.mu.Lock(); defer s.mu.Unlock(); return s.b.String() }

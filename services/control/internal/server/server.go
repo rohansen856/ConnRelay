@@ -97,11 +97,38 @@ func New(cfg *config.Config, pool *pgxpool.Pool, verifier auth.IDTokenVerifier, 
 		"/v1/auth/exchange":      rate.Every(6 * time.Second),
 		"/v1/pairing/challenges": rate.Every(2 * time.Minute),
 	})
-	return &Server{Handler: httpx.WithRequestID(recoverer(limited, log)), Hub: h, Worker: w, pool: pool}
+	return &Server{Handler: httpx.WithRequestID(accessLog(recoverer(limited, log), log)), Hub: h, Worker: w, pool: pool}
 }
 
 // Start runs background workers until ctx ends.
 func (s *Server) Start(ctx context.Context) { go s.Worker.Run(ctx) }
+
+// accessLog records each request at debug level (method, path, status,
+// duration). Query strings are omitted: they can carry cursors and codes.
+func accessLog(next http.Handler, log *slog.Logger) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !log.Enabled(r.Context(), slog.LevelDebug) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+		start := time.Now()
+		next.ServeHTTP(rec, r)
+		log.DebugContext(r.Context(), "request", "method", r.Method, "path", r.URL.Path, "status", rec.status,
+			"ms", time.Since(start).Milliseconds(), "request_id", httpx.RequestID(r.Context()))
+	})
+}
+
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+}
+
+func (s *statusRecorder) WriteHeader(code int) { s.status = code; s.ResponseWriter.WriteHeader(code) }
+
+// Unwrap lets http.ResponseController (and websocket hijacking) reach the
+// underlying writer.
+func (s *statusRecorder) Unwrap() http.ResponseWriter { return s.ResponseWriter }
 
 func recoverer(next http.Handler, log *slog.Logger) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
