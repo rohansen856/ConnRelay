@@ -119,6 +119,7 @@ func RevokeDevice(ctx context.Context, q Q, accountID, id uuid.UUID, version int
 	}
 	_, err = q.Exec(ctx, `UPDATE connection_attempts SET status = 'revoked', ended_at = now()
 		WHERE account_id = $1 AND (phone_device_id = $2 OR host_device_id = $2)
+		  AND ended_at IS NULL
 		  AND status IN ('authorized','signaling','ice_checking','relay_fallback','connected_direct','connected_relay','connected_wss')`,
 		accountID, id)
 	return r, err

@@ -328,6 +328,12 @@ func (s *Service) AgentStatus(ctx context.Context, host, id uuid.UUID, status, p
 	if !validPath(path) {
 		path = ""
 	}
+	if status == "ended" {
+		// A connected session closed: record when, keep how it connected.
+		_, _ = s.Store.Pool.Exec(ctx, `UPDATE connection_attempts SET ended_at = now()
+			WHERE id = $1 AND ended_at IS NULL AND status IN ('connected_direct','connected_relay','connected_wss')`, id)
+		return
+	}
 	if s.setStatus(ctx, id, status, path, failure) == nil && terminal[status] {
 		s.Hub.EndAttempt(id)
 		s.Hub.SendToPhone(ctx, a.Phone, map[string]any{"type": "attempt_status", "attempt_id": id, "status": status, "failure_code": failure})
