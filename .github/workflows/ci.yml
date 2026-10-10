@@ -37,7 +37,7 @@ jobs:
           go install golang.org/x/vuln/cmd/govulncheck@latest
           for m in core/prwcore services/control agents/host tests; do (cd $m && govulncheck ./...); done
 
-  mobile-spike:
+  mobile:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -45,7 +45,7 @@ jobs:
         with:
           flutter-version: "3.41.6"
       - name: analyze and test
-        run: make spike-app
+        run: make mobile
 
   secrets:
     runs-on: ubuntu-24.04
