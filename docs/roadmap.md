@@ -1,6 +1,6 @@
 # Roadmap
 
-**Status:** Draft v1. The MVP is not built yet. Development is at Phase 0/1.
+**Status:** Draft v1. Phases 1–4 are largely implemented for Linux hosts and Android, and the full flow (Google sign-in → pair → grant → terminal → reattach) has been run end to end on a real Android phone against the [local dev stack](operations/deployment.md#local-development-stack). iOS, Phase 5 hardening and the AWS deployment (Phase 6) are not done. See [Current status](#current-status).
 
 ## MVP scope
 
@@ -75,6 +75,17 @@ Terminal data is end-to-end encrypted on every path and bound to the enrolled de
 | AC-10 | The terminal works on networks that only allow TCP/443, including through HTTP proxies and DPI. |
 | AC-11 | A tmux-backed session survives an agent restart. |
 
+## Current status
+
+| Area | State |
+|---|---|
+| Control plane | Built: Google sign-in with allowlist, device-bound refresh, devices, pairing (QR and code), grants, connection attempts and tickets (including `ended_at` when a phone disconnects), TURN credentials, signaling, WSS relay, grant leases, revocation via outbox, per-IP rate limits on unauthenticated endpoints, debug access log. Not built: metrics endpoint, audit/activity API, admin CLI. |
+| Host agent | Built: `pair`, `run`, `status`, `unpair`; tmux backend; both transports with attestation; grant lease cache; reconnect with backoff, including after 75 s of control-socket silence; systemd user unit and installer. Not built: `.deb` package, non-tmux PTY fallback, `doctor`. |
+| Shared core | Built: framing, flow control, attestation, tokens, WebRTC and WSS-relay transports, connection manager, phone connect and terminal clients, gomobile facade. |
+| Android app | Built: sign-in, computer list (pull to refresh, 30 s polling) and detail, QR/code pairing with fingerprint check, grants, terminal with session chooser, reconnect, accessory keys and paste guard, settings. Not built: activity feed, diagnostics screen. |
+| iOS app | Flutter code is shared, but the native bridge (Secure Enclave key, gomobile xcframework) is not built. |
+| Deployment | Local dev stack only. Terraform, Compose, Caddy and coturn for AWS are drafts in the docs. |
+
 ## Delivery phases
 
 ```mermaid
@@ -95,17 +106,17 @@ flowchart LR
 | Phase | Goal | Exit criteria |
 |---|---|---|
 | **0: Decisions and repo** | Settle the open decisions, bootstrap the repository, CI hygiene, threat-model review, arrange devices and Apple developer access. | No open decision changes the transport or the data model. |
-| **1: Feasibility spikes** *(Android and Linux done)* | Prove every data path on real phones and prove terminal persistence. Choose the client transport core. Freeze the wire contracts (frames, schemas, golden vectors, OpenAPI). | Gate A |
-| **2: Backend and identity** | Control-plane skeleton and migrations. Google OIDC and the allowlist. Devices, pairing, grants, tickets, TURN credentials. Signaling and the WSS relay. Audit, outbox, rate limits, metrics. | Cross-account, replay, expiry and revocation tests pass in CI against real Postgres. |
-| **3: Host agent and terminal engine** | Key storage, the `pair` CLI, control WSS, lease cache. Shared-core transports and attestation. tmux and PTY backends, reconciliation, limits, systemd unit, `.deb` package. | A headless client creates a session, detaches, and reattaches after an agent restart, over both transports. |
-| **4: Flutter app** | Sign-in and onboarding, dashboard, pairing, host detail and access, connection progress, terminal, sessions, activity, settings and diagnostics, themes and accessibility. | A tester completes pair → grant → terminal → disconnect → reattach without help. |
+| **1: Feasibility spikes** *(Android and Linux done; iOS open)* | Prove every data path on real phones and prove terminal persistence. Choose the client transport core. Freeze the wire contracts (frames, schemas, golden vectors, OpenAPI). | Gate A |
+| **2: Backend and identity** *(largely done)* | Control-plane skeleton and migrations. Google OIDC and the allowlist. Devices, pairing, grants, tickets, TURN credentials. Signaling and the WSS relay. Audit, outbox, rate limits, metrics. | Cross-account, replay, expiry and revocation tests pass in CI against real Postgres. |
+| **3: Host agent and terminal engine** *(largely done; no `.deb` or PTY fallback)* | Key storage, the `pair` CLI, control WSS, lease cache. Shared-core transports and attestation. tmux and PTY backends, reconciliation, limits, systemd unit, `.deb` package. | A headless client creates a session, detaches, and reattaches after an agent restart, over both transports. |
+| **4: Flutter app** *(Android largely done; iOS bridge open)* | Sign-in and onboarding, dashboard, pairing, host detail and access, connection progress, terminal, sessions, activity, settings and diagnostics, themes and accessibility. | A tester completes pair → grant → terminal → disconnect → reattach without help. |
 | **5: E2E and security** | Network matrix, Wi-Fi↔cellular handoff, revocation during a session, fuzzing, leak scans, resource exhaustion, independent review. | Gates B and C |
 | **6: AWS and operations** | Terraform, Caddy and coturn hardening, monitoring, backup and restore rehearsal, rollback drill, runbooks, load test for sizing. | Gate D |
 | **7: Pilot and release** | Pilot with measured service indicators. Publish the known limitations and the tested-network matrix. Work through the release checklist. | Gate E |
 
 ### Phase 1 spikes
 
-Status: done for Linux hosts and Android; iOS and the carrier field run are open. Results and evidence: [spike results](development/spike-results.md).
+Status: done for Linux hosts and Android; iOS and a carrier-to-carrier field run are open. The spike app and on-device harness have since been removed. Results and evidence: [spike results](development/spike-results.md).
 
 | Spike | Question | Success criterion |
 |---|---|---|

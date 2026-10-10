@@ -16,10 +16,11 @@
 | [components/mobile-app.md](components/mobile-app.md) | Flutter phone app |
 | [components/prwcore.md](components/prwcore.md) | Shared Go protocol and transport core |
 | **Operations** | |
-| [operations/deployment.md](operations/deployment.md) | AWS deployment, coturn, TLS, backups, CI/CD |
-| [operations/runbooks.md](operations/runbooks.md) | Operational procedures and incident response |
+| [operations/deployment.md](operations/deployment.md) | Local dev stack, AWS deployment (planned), alternative hosts, coturn, TLS, backups, CI/CD |
+| [operations/runbooks.md](operations/runbooks.md) | Operational procedures, incident response, dev stack troubleshooting |
 | **Development** | |
 | [development/contributing.md](development/contributing.md) | Repository layout, conventions, commit rules |
-| [development/testing.md](development/testing.md) | Test strategy, network lab, release gates |
+| [development/testing.md](development/testing.md) | Test strategy, how to run each suite, network lab, release gates |
+| [development/spike-results.md](development/spike-results.md) | Phase 1 feasibility spike results (historical record) |
 | **Planning** | |
-| [roadmap.md](roadmap.md) | MVP scope, delivery phases, post-MVP roadmap |
+| [roadmap.md](roadmap.md) | MVP scope, current status, delivery phases, post-MVP roadmap |

@@ -1,6 +1,6 @@
 # Private Remote Workspace
 
-> Working name. **Status:** Phase 1 feasibility spikes done for Linux hosts and Android ([results](docs/development/spike-results.md)); iOS and the carrier field run are open. Not usable as a product yet.
+> Working name. **Status:** working end to end for Linux hosts and Android. Sign-in, pairing, grants and persistent terminals run on a real phone against the [local dev stack](docs/operations/deployment.md#local-development-stack). iOS, security hardening and the public AWS deployment are still open ([roadmap](docs/roadmap.md#current-status)). Not ready for production use.
 
 Private Remote Workspace (PRW) gives your phones secure terminal access to your Linux computers from any network. It is self-hosted and works without a VPN client, a public SSH port or a third-party relay.
 
@@ -45,24 +45,33 @@ Details: [architecture overview](docs/architecture/overview.md).
 
 | Path | Contents | Status |
 |---|---|---|
-| `core/prwcore/` | Shared Go core: frames, flow control, attestation, tokens, WebRTC and WSS-relay transports, connection manager | Phase 1 (tested) |
-| `services/control/` | Go control plane: WSS relay splicer and TURN credentials so far, plus a network-lab stand-in | Phase 1 (partial) |
-| `agents/host/` | Go Linux host agent: PTY, tmux backend, flow-controlled streams, terminal session server | Phase 1 (partial) |
-| `apps/mobile_spike/` | Throwaway Flutter app and gomobile probe used for the on-device spikes | Spike |
-| `apps/mobile/` | Product Flutter app (Android, iOS) | Planned (Phase 4) |
-| `protocol/` | Golden test vectors (frames so far) | Phase 1 (partial) |
-| `tests/` | Network lab (Docker), device lab (adb), spike scripts | Phase 1 |
-| `migrations/`, `deploy/` | Database migrations, Terraform, Compose, coturn, Caddy | Planned |
+| `core/prwcore/` | Shared Go core: frames, flow control, attestation, tokens, WebRTC and WSS-relay transports, connection manager, phone connect and terminal clients, gomobile facade | ✔ |
+| `services/control/` | Go control plane: Google sign-in, devices, pairing, grants, connection attempts, signaling, WSS relay, TURN credentials, revocation; migrations in `migrations/` | ✔ (no metrics or admin CLI yet) |
+| `agents/host/` | Go Linux host agent: pairing CLI, tmux sessions, both transports, grant lease cache, systemd user unit | ✔ (no `.deb` yet) |
+| `apps/mobile/` | Flutter phone app with the gomobile core and a vendored xterm fork | Android ✔ · iOS bridge open |
+| `protocol/` | Golden test vectors (frames) | Partial |
+| `deploy/dev/` | Local dev stack: Postgres, control plane and a Cloudflare quick tunnel | ✔ |
+| `deploy/` (AWS) | Terraform, Compose, coturn, Caddy | Planned |
+| `tests/` | Network lab (Docker), spike scripts, Phase 1 field run | ✔ |
 | `docs/` | Project documentation | ✔ |
+
+### Try it locally
+
+```sh
+deploy/dev/devstack.sh up            # Postgres + control plane + public HTTPS URL
+prw-agent pair --server "$(cat ~/.local/share/prw-dev/public_url)" && prw-agent run
+```
+
+Then build the Android app against that URL. The full steps, including the Google client ID and the sign-in allowlist, are in [deployment](docs/operations/deployment.md#local-development-stack).
 
 ### Run the tests
 
 ```sh
-make vet test-race      # all Go modules (needs tmux)
-make spike-app          # Flutter spike app + xterm.dart TUI replay
-make netlab             # Docker NAT/TURN/HTTPS-proxy lab
-make spike-s4           # tmux survives agent restart under systemd --user
-LAN_IP=<ip> make devicelab   # real Android phone over adb
+make vet test-race              # all Go modules (needs tmux; Docker for database tests)
+PRW_REQUIRE_DB=1 make test-race # same, failing instead of skipping without a database
+make mobile                     # Flutter app: analyze + tests (incl. xterm fork and TUI replay)
+make netlab                     # Docker NAT/TURN/HTTPS-proxy lab
+make spike-s4                   # tmux survives agent restart under systemd --user
 ```
 
 ## Documentation
@@ -73,19 +82,19 @@ LAN_IP=<ip> make devicelab   # real Android phone over adb
 | Technical | [Protocol](docs/technical/protocol.md) · [Security](docs/technical/security.md) · [Data model](docs/technical/data-model.md) · [API](docs/technical/api.md) |
 | Components | [Control plane](docs/components/control-plane.md) · [Host agent](docs/components/host-agent.md) · [Mobile app](docs/components/mobile-app.md) · [prwcore](docs/components/prwcore.md) |
 | Operations | [Deployment](docs/operations/deployment.md) · [Runbooks](docs/operations/runbooks.md) |
-| Development | [Contributing](docs/development/contributing.md) · [Testing](docs/development/testing.md) |
+| Development | [Contributing](docs/development/contributing.md) · [Testing](docs/development/testing.md) · [Spike results](docs/development/spike-results.md) |
 | Planning | [Roadmap](docs/roadmap.md) |
 
 ## Tech stack
 
 | Layer | Choice |
 |---|---|
-| Mobile | Flutter 3.41 / Dart 3.11, Riverpod, go_router, xterm.dart |
-| Backend and agent | Go 1.26+ (toolchain go1.27.2), Pion WebRTC v4, pgx v5, sqlc, goose, coder/websocket, creack/pty |
+| Mobile | Flutter 3.41 / Dart 3.11, Riverpod, go_router, google_sign_in, xterm.dart (vendored fork), shared Go core via gomobile |
+| Backend and agent | Go 1.26+ (toolchain go1.27.2), Pion WebRTC v4, pgx v5, goose, coder/websocket, creack/pty |
 | Data | PostgreSQL 16+ |
 | Relay | coturn ≥ 4.18 and a built-in WSS relay |
 | Identity | Google OIDC; ECDSA P-256 device keys; Ed25519 server signing keys |
-| Infrastructure | One AWS EC2 instance with two Elastic IPs, Docker Compose, Caddy, Terraform |
+| Infrastructure | Planned: one AWS EC2 instance with two Elastic IPs, Docker Compose, Caddy, Terraform. Today: the local dev stack. |
 
 ## Security notes
 
