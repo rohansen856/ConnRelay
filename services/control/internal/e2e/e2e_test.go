@@ -307,6 +307,20 @@ func TestFullSystem(t *testing.T) {
 	t.Logf("step 2 done at %v", time.Since(start))
 	tc.Close() // the phone loses its connection
 	t.Logf("closed at %v", time.Since(start))
+	// The host reports the end; the attempt keeps the path it connected on.
+	for i := 0; ; i++ {
+		_, a, _ := w.call("GET", "/v1/connections/"+res.AttemptID, p.access, nil)
+		if a["ended_at"] != nil {
+			if a["status"] != "connected_direct" {
+				t.Fatalf("ended attempt status %v", a["status"])
+			}
+			break
+		}
+		if i > 100 {
+			t.Fatalf("attempt never ended: %v", a)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 	session := sess.ID
 
 	// 3. Reconnect over the WSS relay (inner TLS) and re-attach the same shell.

@@ -590,4 +590,5 @@ func (a *Agent) handleAttempt(ctx context.Context, raw json.RawMessage, sigs cha
 	}
 	_ = a.Terms.Serve(context.Background(), conn)
 	conn.Close()
+	a.status(context.Background(), in.AttemptID, "ended", pathType, "")
 }
