@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Spike S5 capture: record a TUI's raw output stream inside tmux, resize it
 # midway, and save tmux's final screen as ground truth for the xterm.dart
-# replay test (apps/mobile_spike/app/test/xterm_tui_test.dart).
+# replay test (apps/mobile/test/xterm_tui_test.dart).
 #
 #   tests/spikes/s5_capture_tui.sh <name> <command...>
 #
-# Output goes to apps/mobile_spike/app/test/fixtures/ (gitignored: captures
+# Output goes to apps/mobile/test/fixtures/ (gitignored: captures
 # can contain account names or paths). The program runs in an empty temporary
 # directory. Optional KEYS (tmux key names, space-separated) are sent after
 # PRE seconds to get past first-run dialogs; no prompt text is ever sent. The
@@ -13,7 +13,7 @@
 set -euo pipefail
 name=$1; shift
 root=$(cd "$(dirname "$0")/../.." && pwd)
-out="$root/apps/mobile_spike/app/test/fixtures"
+out="$root/apps/mobile/test/fixtures"
 mkdir -p "$out"
 work=$(mktemp -d /tmp/prw-s5.XXXXXX)
 sock="$work/t.sock"
