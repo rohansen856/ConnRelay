@@ -43,8 +43,9 @@ up() {
 
   # Tunnel first: the public URL is part of the server's configuration.
   if [[ ! -f $home/tunnel.pid ]] || ! kill -0 "$(cat "$home/tunnel.pid")" 2>/dev/null; then
+    # http2 (TCP): QUIC to the edge keeps timing out on UDP-hostile networks.
     : > "$home/cloudflared.yml"
-    cloudflared --config "$home/cloudflared.yml" tunnel --no-autoupdate --url "http://127.0.0.1:$port" > "$home/tunnel.log" 2>&1 &
+    cloudflared --config "$home/cloudflared.yml" tunnel --no-autoupdate --protocol http2 --url "http://127.0.0.1:$port" > "$home/tunnel.log" 2>&1 &
     echo $! > "$home/tunnel.pid"
     for _ in $(seq 1 60); do grep -qo 'https://[a-z0-9-]*\.trycloudflare\.com' "$home/tunnel.log" && break; sleep 1; done
   fi
