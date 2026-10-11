@@ -2,6 +2,8 @@
 
 **Status:** Draft v1. Rehearse each procedure in staging before the private beta and update it from what you learn.
 
+> **Not implemented yet.** These procedures describe the target AWS deployment, which does not exist yet. Several commands they use are planned rather than built: the `prwctl admin …` subcommands, `prw-control migrate up|status` (today migrations run automatically when `prw-control serve` starts), a `healthcheck` subcommand, `prw-agent doctor`, `PRW_PAIRING_ENABLED`, the `deploy/scripts/` helpers and the Prometheus metrics. The commands that exist today are `prw-control serve|check-config|keygen` and `prw-agent pair|run|status|unpair|version`. For the local stack, see [Dev stack troubleshooting](#dev-stack-troubleshooting).
+
 Conventions:
 - Run commands on the instance through **SSM Session Manager** (`aws ssm start-session --target <instance-id>`).
 - `prwctl` is shorthand for `docker compose -f /opt/prw/deploy/compose/compose.yaml exec control /prw-control`.
@@ -21,6 +23,7 @@ Conventions:
 | [Relay abuse or bandwidth spike](#relay-abuse-or-bandwidth-spike) | Relay alerts fire |
 | [Server loss recovery](#server-loss-recovery) | Instance or AZ is gone |
 | [Security incident response](#security-incident-response) | Suspected breach |
+| [Dev stack troubleshooting](#dev-stack-troubleshooting) | Problems with `deploy/dev/devstack.sh` and a test phone |
 
 ---
 
@@ -94,10 +97,10 @@ Afterwards, run `gitleaks` against the repo and confirm that no secret is presen
 
 Start from the `connection_attempt_id` shown on the app's diagnostics screen. Do **not** ask for terminal output or screenshots of terminal content.
 
-1. **Attempt record.** Run `prwctl admin attempt show <id>` and note:
+1. **Attempt record.** Run `prwctl admin attempt show <id>` (until it exists: `GET /v1/connections/<id>` with the phone's access token, or the `connection_attempts` row) and note:
    - the status and failure code;
    - the path attempted (direct, TURN, WSS relay);
-   - the timestamps.
+   - the timestamps (`created_at`, `connected_at`, and `ended_at`, which the host reports when a connected phone disconnects).
 2. **Use the failure code:**
 
    | Code | Likely cause | Next step |
@@ -179,3 +182,18 @@ If the control plane itself is suspected compromised, assume the attacker could:
 - enroll a new phone and grant it access.
 
 Phone keys pinned on hosts limit impersonation of *existing* phones. Revoke every grant, rotate every server key, re-pair the hosts, and grant access again deliberately.
+
+## Dev stack troubleshooting
+
+For `deploy/dev/devstack.sh` and a test phone. Logs are in `~/.local/share/prw-dev/` (`control.log`, `tunnel.log`); run the agent with its output redirected to a file to keep its log.
+
+| Symptom | Cause and fix |
+|---|---|
+| `up` exits silently or prints `not ready` | Read the tail of `control.log`. `check-config` errors list every bad setting at once. |
+| Sign-in fails with "This Google account is not allowed on this server" | The Google subject is not allowlisted. `control.log` contains `sign-in denied: subject not in PRW_ALLOWED_SUBJECTS` with the subject; add it to `allowed_subjects` and run `up` again. |
+| A computer shows **Stale** while its agent runs | The control socket went half-open (no traffic in either direction). Both sides now give up after 75 s of silence: the server closes with code 4408 and the agent reconnects with backoff. If it persists, check `agent` log lines `control connection lost; reconnecting`. |
+| Requests fail for a few seconds with HTTP 530, and the agent logs `TLS handshake timeout` | The quick tunnel lost its edge connection (`tunnel.log`: `Failed to dial a quic connection` or `Serve tunnel error`). It recovers by itself. New tunnels use `--protocol http2`, which avoids the UDP timeouts. |
+| The device list looks out of date | The list polls every 30 s while open and supports pull to refresh in every state, including the error view. With `PRW_LOG_LEVEL=debug`, each fetch appears in `control.log` as `"path":"/v1/devices"`. |
+| `adb install` fails with `INSTALL_FAILED_VERSION_DOWNGRADE` | Rebuild with a higher `--build-number`. |
+| Everything broke after restarting the tunnel | The public URL changed. Rebuild the app with the new `PRW_API`, and pair the agent again (it stores the server URL). |
+

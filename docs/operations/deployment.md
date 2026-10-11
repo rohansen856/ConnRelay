@@ -1,6 +1,6 @@
 # Deployment (AWS)
 
-**Status:** Draft v1 for the private-beta deployment. None of the files under `deploy/` exist yet. All values here are placeholders until they are validated in staging.
+**Status:** Draft v1 for the private-beta deployment. The AWS deployment is **not built yet**: the Terraform, Compose, Caddy and coturn files described here are drafts, and only `deploy/dev/` (the [local development stack](#local-development-stack)) exists. All values here are placeholders until they are validated in staging.
 
 PRW runs on **one EC2 instance with two Elastic IPs**:
 
@@ -10,6 +10,60 @@ PRW runs on **one EC2 instance with two Elastic IPs**:
 | EIP-B | `turn.example.invalid` | coturn: STUN/TURN on UDP/TCP 3478, TURN-over-TLS on TCP **443** and 5349, and the UDP relay range |
 
 The second IP exists so that TURN-over-TLS can listen on port 443, which restrictive networks usually allow, without colliding with HTTPS. This deployment is a **documented single point of failure**. See [Capacity, cost and the split trigger](#capacity-cost-and-the-split-trigger) for when to split it.
+
+---
+
+## Local development stack
+
+`deploy/dev/devstack.sh` runs a complete control plane on a developer machine and exposes it to a real phone through a temporary public HTTPS URL. It is for development only.
+
+```sh
+deploy/dev/devstack.sh up      # start (or restart) everything and print the public URL
+deploy/dev/devstack.sh down    # stop it; the database volume is kept
+```
+
+| Piece | Details |
+|---|---|
+| PostgreSQL | Docker container `prw-dev-db` (`postgres:16-alpine`) on `127.0.0.1:55432`, data in the volume `prw-dev-pg`. Migrations run when the control plane starts. |
+| Control plane | Built from source and run as `prw-control serve` on `127.0.0.1:18080`, restarted on every `up` so allowlist changes apply. Runs with `PRW_LOG_LEVEL=debug` (override with the environment variable), which adds an access log line per request: method, path, status, duration and request ID, never query strings. |
+| Public URL | A Cloudflare quick tunnel (`cloudflared`, run with an empty config so `~/.cloudflared/config.yml` is never used) over `--protocol http2`, because QUIC to the edge keeps timing out on UDP-hostile networks. The `https://….trycloudflare.com` URL changes whenever the tunnel restarts. |
+| TURN | None. Connections use direct ICE (public STUN) or the WSS relay. |
+| State | `~/.local/share/prw-dev` (override with `PRW_DEV_HOME`): generated keys in `secrets/`, the database password, `public_url`, `control.log`, `tunnel.log` and pid files. Nothing is written to the repository. |
+| Google client IDs | Read from `./.env` (`GOOGLE_WEB_CLIENT_ID`, gitignored). The Web client ID is the accepted ID-token audience. |
+
+**Allowlist.** `~/.local/share/prw-dev/allowed_subjects` holds one `google:<sub>` per line. While it is empty the server starts with a placeholder subject and denies everyone. Sign in once from the phone: the denial is logged in `control.log` with the subject to add (`sign-in denied: subject not in PRW_ALLOWED_SUBJECTS`). Add that line and run `up` again.
+
+**Host agent.**
+
+```sh
+go build -o ~/.local/bin/prw-agent ./agents/host/cmd/prw-agent
+prw-agent pair --server "$(cat ~/.local/share/prw-dev/public_url)"
+prw-agent run
+```
+
+The agent stores the server URL at pairing time, so a new tunnel URL means pairing again.
+
+**Phone app (Android).**
+
+```sh
+apps/mobile/gocore/build-aar.sh            # gomobile AAR of the shared core
+cd apps/mobile
+flutter build apk --release --build-number=<higher than the installed build> \
+  --dart-define=PRW_API="$(cat ~/.local/share/prw-dev/public_url)" \
+  --dart-define=PRW_GOOGLE_SERVER_CLIENT_ID=<web client id>
+adb install -r build/app/outputs/flutter-apk/app-release.apk
+```
+
+The API URL is compiled into the app, so a new tunnel URL also means rebuilding it. Android refuses an install whose build number is lower than the installed one (`INSTALL_FAILED_VERSION_DOWNGRADE`).
+
+## Alternative hosts
+
+Not set up; this records what was evaluated.
+
+| Host | Fit | Notes |
+|---|---|---|
+| **Render** (web service + managed Postgres) | Possible, with limits | <ul><li>**One instance only.** Agent sockets, signaling and relay splices live in the control plane's memory.</li><li>**No UDP**, so no coturn. Paths are direct ICE and the WSS relay, or an external TURN service.</li><li>Use a paid instance: free services sleep when idle.</li><li>**Needs a code change first:** the per-IP rate limiter trusts `X-Forwarded-For` only from a loopback peer, so behind Render's proxy every client would share one bucket.</li><li>Render Secret Files suit the `*_FILE` settings.</li><li>A deploy restarts the process; agents and phones reconnect, and tmux sessions are unaffected.</li></ul> |
+| **Vercel** | No | Serverless functions cannot hold the long-lived WebSockets (agent control, signaling, relay) or the in-memory state they share. |
 
 ---
 
@@ -281,7 +335,7 @@ services:
     networks: [backend]
     depends_on: [postgres]
     healthcheck:
-      test: ["CMD", "/prw-control", "healthcheck"]
+      test: ["CMD", "/prw-control", "healthcheck"]   # planned subcommand; probe /health/ready until then
       interval: 15s
     restart: unless-stopped
     mem_limit: 768m
@@ -339,22 +393,21 @@ volumes:
 
 | Variable | Example | Purpose |
 |---|---|---|
-| `PRW_PUBLIC_BASE_URL` | `https://api.example.invalid` | Base URL used to build absolute URLs and WSS endpoints |
-| `PRW_LISTEN_ADDR` | `:8080` | API listener inside the container |
-| `PRW_METRICS_ADDR` | `:9090` | Prometheus listener |
-| `PRW_DATABASE_URL_FILE` | `/run/secrets/database_url` | DSN for the `prw_app` role |
-| `PRW_GOOGLE_CLIENT_IDS` | `<android-client-id>,<ios-client-id>` | Accepted `aud` values for Google ID tokens (issuer fixed to `https://accounts.google.com`) |
-| `PRW_ALLOWED_SUBJECTS` | `<google sub>` | Allowlist of Google `sub` values; everyone else is denied |
-| `PRW_ACCESS_SIGNING_KEY_FILE` | `/run/secrets/access_signing_key` | Ed25519 key for access tokens |
-| `PRW_TICKET_SIGNING_KEY_FILE` | `/run/secrets/ticket_signing_key` | Ed25519 key for connection tickets, grant leases and relay tokens |
-| `PRW_PAIRING_HMAC_KEY_FILE` | `/run/secrets/pairing_hmac_key` | Pepper for hashing pairing refs and codes |
-| `PRW_TURN_SHARED_SECRET_FILE` | `/run/secrets/turn_shared_secret` | Secret shared with coturn for TURN REST credentials |
-| `PRW_TURN_URLS` | `turn:turn.example.invalid:3478?transport=udp,turn:turn.example.invalid:3478?transport=tcp,turns:turn.example.invalid:443?transport=tcp` | ICE servers sent to clients |
-| `PRW_TURN_REALM` | `turn.example.invalid` | coturn realm |
-| `PRW_RELAY_MAX_BPS` | `262144` | Per-attempt WSS relay rate cap, in bytes/s |
-| `PRW_RELAY_MAX_BYTES` | `2147483648` | Per-attempt WSS relay volume cap |
-| `PRW_RELAY_MAX_SPLICES` | `32` | Maximum concurrent relay splices |
-| `PRW_LOG_LEVEL` | `info` | Log level: `debug`, `info`, `warn` or `error` |
+| `PRW_PUBLIC_BASE_URL` | `https://api.example.invalid` | Base URL used to build absolute URLs and WSS endpoints. Must be `https` unless `PRW_DEV_ALLOW_HTTP=1`. |
+| `PRW_LISTEN_ADDR` | `127.0.0.1:8080` | API listener (default `127.0.0.1:8080`) |
+| `PRW_DATABASE_URL_FILE` | `/run/secrets/database_url` | DSN for the `prw_app` role. `PRW_DATABASE_URL` is accepted for local use. |
+| `PRW_GOOGLE_CLIENT_IDS` | `<web-client-id>` | Accepted `aud` values for Google ID tokens (issuer fixed to `https://accounts.google.com`). The app requests ID tokens for the Web (server) client ID. |
+| `PRW_ALLOWED_SUBJECTS` | `google:<sub>` | Comma-separated allowlist of Google subjects; everyone else is denied. The server refuses to start with an empty list. |
+| `PRW_ACCESS_SIGNING_KEY_FILE` | `/run/secrets/access_signing_key.pem` | Ed25519 key for access tokens (`prw-control keygen <dir>` generates all keys) |
+| `PRW_TICKET_SIGNING_KEY_FILE` | `/run/secrets/ticket_signing_key.pem` | Ed25519 key for connection tickets, grant leases and relay tokens. Must differ from the access key. |
+| `PRW_PAIRING_HMAC_KEY_FILE` | `/run/secrets/pairing_hmac_key` | Pepper for hashing pairing refs and codes (≥ 32 bytes) |
+| `PRW_TURN_SHARED_SECRET_FILE` | `/run/secrets/turn_shared_secret` | Secret shared with coturn for TURN REST credentials (≥ 32 bytes) |
+| `PRW_TURN_URLS` | `turn:turn.example.invalid:3478?transport=udp,turn:turn.example.invalid:3478?transport=tcp,turns:turn.example.invalid:443?transport=tcp` | TURN servers sent to clients (required) |
+| `PRW_STUN_URLS` | `stun:turn.example.invalid:3478` | Optional STUN servers sent to clients |
+| `PRW_RELAY_MAX_BPS` | `2000000` | Per-attempt WSS relay rate cap, in **bits** per second (default 2 Mbit/s). The per-attempt volume cap is fixed at 2 GiB. |
+| `PRW_LOG_LEVEL` | `info` | `debug`, `info`, `warn` or `error`. `debug` adds a per-request access log. |
+
+`prw-control check-config` validates the environment without starting the server. A separate metrics listener, a configurable TURN realm and a relay splice limit are planned but not implemented.
 
 ### Secrets (SSM Parameter Store, SecureString)
 
