@@ -1,6 +1,6 @@
 # Security Model
 
-> **Status:** design, not yet implemented. Items marked *proposed* have not been confirmed and may change.
+> **Status:** the authorization chain (§5), revocation (§6) and key handling (§4) are implemented for Linux hosts and Android. Controls that are not built yet are marked *planned*; production controls tied to the AWS deployment (Caddy, coturn, SSM, backups) are the target design. Items marked *proposed* have not been confirmed and may change.
 
 PRW lets a phone open a shell on a computer. A shell runs with the full privileges of the host user, so the whole design rests on one rule. **Nothing a phone sends reaches the shell unless the control plane authorized it, the host checked it independently, and both peers proved their device identities on the live transport.**
 
@@ -14,8 +14,8 @@ Related documents: [Architecture overview](../architecture/overview.md), [Protoc
 |---|---|---|
 | AS-01 | Host shell: the user's OS privileges, files and any credentials on disk | Critical |
 | AS-02 | Terminal input and output, including secrets that tools and coding agents print | Critical |
-| AS-03 | Phone device private key (Android Keystore / iOS Secure Enclave) | High |
-| AS-04 | Host device private key (`~/.config/prw/device.key`) | High |
+| AS-03 | Phone device private key (Android Keystore; iOS Secure Enclave when the iOS build exists) | High |
+| AS-04 | Host device private key (`~/.config/prw/host_key.pem`) | High |
 | AS-05 | Server signing keys (Ed25519) for access tokens, tickets, relay tokens and leases | Critical |
 | AS-06 | Refresh, access and agent tokens | High |
 | AS-07 | Pairing references, pairing codes and the pairing HMAC pepper | High (short-lived) |
@@ -78,16 +78,16 @@ The critical boundary is **agent → shell**. Every terminal operation crosses i
 
 | Key | Algorithm | Generated on | Stored at | Used for |
 |---|---|---|---|---|
-| Phone device key | ECDSA P-256 | Phone | Android Keystore (StrongBox when available, otherwise TEE); iOS Secure Enclave. Not exportable. | Proof of possession at sign-in and refresh, and peer attestation |
-| Host device key | ECDSA P-256 | Host | `~/.config/prw/device.key`, mode 0600, owned by the agent user. The agent refuses to start with looser permissions. TPM storage is *proposed* for later. | Pairing proof of possession, agent WSS authentication, and peer attestation |
-| Server signing keys | Ed25519 | Operator | SSM Parameter Store, mounted as files on the server; never in the database or image | Access JWTs, connection tickets, relay tokens and grant leases |
+| Phone device key | ECDSA P-256 | Phone | Android Keystore (StrongBox when available, otherwise TEE). Not exportable. iOS Secure Enclave is *planned* with the iOS build. | Proof of possession at sign-in and refresh, and peer attestation |
+| Host device key | ECDSA P-256 | Host | `$XDG_CONFIG_HOME/prw/host_key.pem` (default `~/.config/prw/`), PKCS#8 PEM, mode 0600 in a 0700 directory, owned by the agent user. The agent refuses to load it if group or others can read it. TPM storage is *proposed* for later. | Pairing proof of possession, agent WSS authentication, and peer attestation |
+| Server signing keys | Ed25519 | Operator (`prw-control keygen`) | Files referenced by `PRW_ACCESS_SIGNING_KEY_FILE` and `PRW_TICKET_SIGNING_KEY_FILE`; in production, SSM Parameter Store mounted as files. Never in the database or image. | Access JWTs (access key); connection tickets, relay tokens and grant leases (ticket key) |
 | Ephemeral transport certificates | ECDSA P-256 (DTLS/TLS) | Per connection | Memory only | WebRTC DTLS and the inner TLS 1.3 of the WSS relay |
 | TURN secret | HMAC-SHA1 shared secret (TURN REST) | Operator | SSM, shared by the control plane and coturn | Short-lived TURN credentials |
 | Pairing pepper | 256-bit HMAC key | Operator | SSM | Hashing pairing references, codes and wait tokens |
 
-Private device keys never leave the device. The database stores only public keys (SPKI), fingerprints and hashes. When a host enrolls, it pins the server's ticket-verification public keys (JWKS). Rotating those keys requires a statement signed by the previous key.
+Private device keys never leave the device. The database stores only public keys (SPKI), fingerprints and hashes. When a host enrolls, it pins the server's ticket-verification public keys (JWKS). Key rotation, with a statement signed by the previous key, is *planned*; until then rotating the ticket key means re-pairing hosts.
 
-**Account sign-in** uses **Google OIDC only** (Authorization Code with PKCE, via AppAuth). The server validates the ID token (`iss`, `aud`, signature, expiry, nonce) and then checks the Google subject against an allowlist (`PRW_ALLOWED_SUBJECTS`). There is no open sign-up.
+**Account sign-in** uses **Google OIDC only**. The phone obtains an ID token through the platform Google Sign-In SDK, bound to a single-use server nonce. The server validates the ID token (`iss`, `aud`, signature, expiry, nonce) and then checks the Google subject against an allowlist (`PRW_ALLOWED_SUBJECTS`). There is no open sign-up. A denied sign-in is audited with a hash of the subject, and the server log records the subject itself so the operator can allowlist their own account.
 
 **New phones.** Signing in with an allowlisted Google account enrolls the phone as a new device. No further approval is needed. A new phone starts with **no grants**: it can see the inventory but cannot open a terminal until the owner grants it access to a host. Every phone enrollment is audited and appears in the Activity feed.
 
@@ -128,14 +128,15 @@ The host accepts `terminal.*` messages only after both sides have sent `peer.ide
 
 | Event | Effect |
 |---|---|
-| Grant revoked | One DB transaction marks the grant revoked, marks its live attempts `revoked`, and writes an audit row and an outbox event. The outbox pushes `revoke_notice` to the host and phone. The agent closes the affected peer connections. |
-| Phone revoked | All of the phone's grants, refresh tokens and credentials are revoked in the same transaction, followed by the same push. |
-| Host revoked | All grants to the host are revoked. Phones refuse its pinned key from then on. |
+| Grant revoked | One DB transaction marks the grant revoked and writes an audit row and an outbox event. The outbox sends the host a fresh lease and a `revoke_notice`, and notifies the phone. The agent closes the affected peer connections. |
+| Phone revoked | All of the phone's grants and refresh tokens are revoked, and its live attempts are marked `revoked`, in the same transaction. Every host it could reach gets a fresh lease and a `revoke_notice`; the phone's sockets are closed with `4403`, and its API calls return `device_revoked` from then on. |
+| Host revoked | All grants to the host are revoked. Its control socket is closed with `4403` and it can no longer authenticate; the agent closes every peer and exits. |
 
 - **Target:** active connections close within **30 seconds** of revocation while the host is online.
 - **Effect on terminals:** revocation **detaches** the revoked phone and closes its transport. The tmux session itself keeps running on the host, and can be reattached or terminated by an authorized phone.
 - **Grant lease:** the agent holds a signed grant lease (10 min, renewed every 3 min) listing the phones allowed to connect. If revocation pushes are lost, or the control plane is unreachable, the lease expires. The agent then refuses new sessions and closes existing peer connections.
-- **Immediate refusal:** new tickets are refused at once. Authorization checks always read the database; the push only speeds up enforcement.
+- **Immediate refusal:** new tickets are refused at once. Authorization checks always read the database (the phone's device state is re-checked on every API request); the push only speeds up enforcement.
+- **Delivery:** the push is best effort and attempted once. An agent that was offline receives a lease reflecting the change when it reconnects, and an agent whose control socket went half-open notices within 75 s and reconnects. Retries and acknowledgements are *planned*.
 
 ---
 
@@ -152,20 +153,20 @@ Ratings: likelihood (L) and impact (I) on an H/M/L scale. C means critical.
 | TM-05 | Compromised PC | L | H | Damage is limited to that host. There are no host-to-host grants; device kind is enforced in the schema. Revoke the host. | A host token cannot call phone endpoints or obtain tickets |
 | TM-06 | Unauthorized command execution | M | C | Four-layer chain (§5). No exec endpoint. | Open without a grant, with an expired or replayed ticket, with the wrong audience, or before attestation: all refused |
 | TM-07 | Signaling tampering | L | H | Attestation verifies the transport fingerprint against the pinned device key. | A man-in-the-middle signaling proxy that swaps fingerprints is detected |
-| TM-08 | Replay of pairing artifacts, tickets, signaling or attestations | M | H | Single-use `jti` cache on the host. Server nonce, attempt ID and expiry inside the attestation. Pairing consumption is transactional. Signaling `message_id` deduplication. | Replay of each artifact |
+| TM-08 | Replay of pairing artifacts, tickets, signaling or attestations | M | H | Single-use `jti` cache on the host and single-use relay-token `jti` on the server. Server nonce, attempt ID and expiry inside the attestation. Pairing consumption is transactional. Signaling is accepted only for a live attempt between its two devices (`message_id` deduplication is *planned*). | Replay of each artifact |
 | TM-09 | TURN credential misconfiguration | M | M | TURN REST HMAC credentials per attempt, TTL ≤ 10 min. The secret exists only on the server. CI scans the app for embedded credentials. | String scan of the app binary; an expired credential is rejected by coturn |
 | TM-10 | Relay abuse and excessive bandwidth | M | M | TURN credentials need a valid attempt. Quotas and `max-bps`. `denied-peer-ip` for internal and metadata ranges. The WSS relay only splices the two parties of one attempt, with per-attempt rate and byte caps and an idle timeout. Byte alerts. | Allocation to 169.254.169.254 is denied; byte caps are enforced |
-| TM-11 | Denial of service on API, WSS or TURN | M | M | Caddy limits, token buckets per IP, account and device, body and frame caps, connection caps. Established direct sessions survive until their lease expires. | Flood tests return 429 and the service stays up |
-| TM-12 | Token leakage | M | H | Tokens are sent only in headers or the first WebSocket message, never in URLs. Typed, redacted logging. Hashed storage. | Log corpus scan after a full end-to-end run |
-| TM-13 | Terminal output leaking into logs | M | C | Server components never handle terminal bytes. Inside the agent, payload types cannot be logged. | End-to-end canary string is absent from all logs and the database |
-| TM-14 | Secrets printed by coding agents | H | M | Scrollback lives only in memory and is cleared on app lock or background (configurable). `FLAG_SECURE` on Android and snapshot blur on iOS for the terminal screen (*proposed* default on). | Screenshot protection is present; scrollback is gone after the process dies |
-| TM-15 | Malicious escape sequences | M | M | Renderer filter: OSC 52 clipboard writes are off by default, OSC 8 links require a confirmation tap, titles are capped and sanitized, unknown DCS/APC sequences are ignored. Nothing auto-opens. | Escape-sequence corpus tests |
+| TM-11 | Denial of service on API, WSS or TURN | M | M | Per-IP token buckets on sign-in and pairing, 10 attempts per minute per phone, body and frame caps, signaling caps per attempt, relay rate and byte caps. Caddy limits and per-account caps are *planned*. Established direct sessions survive until their lease expires. | Rate-limit tests return 429 and the service stays up |
+| TM-12 | Token leakage | M | H | Tokens are sent only in headers or the first WebSocket message, never in URLs. The debug request log records only method, path, status and duration, never query strings or bodies. Hashed storage. | Access-log test checks that query strings are omitted; log corpus scan after an end-to-end run (*planned*) |
+| TM-13 | Terminal output leaking into logs | M | C | Server components never handle terminal bytes; the relay copies opaque ciphertext. The agent logs only lifecycle events. | End-to-end canary string absent from all logs and the database (*planned*) |
+| TM-14 | Secrets printed by coding agents | H | M | Scrollback lives only in memory (10 000 lines) and dies with the process. Clearing it on app lock, `FLAG_SECURE` on Android and snapshot blur on iOS are *planned* (*proposed* default on). | Scrollback is gone after the process dies |
+| TM-15 | Malicious escape sequences | M | M | The vendored renderer has no clipboard-write (OSC 52) handler, so programs cannot set the phone clipboard. Nothing auto-opens. OSC 8 link confirmation, title sanitizing and a corpus test are *planned*. Pastes into the terminal need confirmation. | Escape-sequence corpus tests (*planned*) |
 | TM-16 | API authorization failures (IDOR, cross-account access) | M | H | The account ID is derived from the token in every query. Composite same-account foreign keys. 404 responses for other accounts' resources. | Cross-account matrix over every route |
-| TM-17 | Dependency or supply-chain compromise | M | C | Lockfiles, `govulncheck`, `osv-scanner`, Dependabot, SBOM, pinned image digests, license inventory. | CI fails on known critical vulnerabilities |
-| TM-18 | Secrets committed to Git | M | H | gitleaks pre-commit and in CI. `.gitignore` for keys and env files. Placeholders only. | gitleaks run over the full history |
-| TM-19 | Over-permissive Linux service | M | H | `systemd --user` service. The agent refuses UID 0 and checks key and runtime-directory permissions at startup. `NoNewPrivileges`. | Running as root exits; bad permissions exit |
-| TM-20 | Compromised agent update | L | C | Manual updates in V1. Signed packages and checksums. The install script verifies signatures. | The installer rejects a bad signature |
-| TM-21 | Persistent outbound channel abused as command and control | L | C | The control channel accepts only allowlisted message types and cannot carry terminal operations. Terminal operations need an attested phone key. | Unknown control message types are dropped and audited |
+| TM-17 | Dependency or supply-chain compromise | M | C | Lockfiles and `govulncheck` in CI. `osv-scanner`, Dependabot, SBOM, pinned image digests and a license inventory are *planned*. | CI fails on known vulnerabilities |
+| TM-18 | Secrets committed to Git | M | H | gitleaks in CI over the full history. `.gitignore` for keys and `.env`. Placeholders only in docs and tests. | gitleaks job |
+| TM-19 | Over-permissive Linux service | M | H | `systemd --user` service with `NoNewPrivileges=yes` and `UMask=0077`. The agent refuses UID 0 and refuses a key file readable by group or others. | Running as root exits; bad permissions exit |
+| TM-20 | Compromised agent update | L | C | Manual updates in V1. Signed packages, checksums and signature checks in the install script are *planned*. | The installer rejects a bad signature (*planned*) |
+| TM-21 | Persistent outbound channel abused as command and control | L | C | The control channel accepts only allowlisted message types and cannot carry terminal operations. Terminal operations need an attested phone key. | Unknown control message types are dropped and logged |
 | TM-22 | Resource exhaustion | M | M | Credit-based flow control (≤ 256 KiB in flight). Per host: 20 sessions and 8 peers. Message caps. tmux `history-limit`. Phone scrollback capped at 10k lines. | 50 MB burst, `yes` flood, a 21st session refused |
 | TM-23 | Protocol downgrade | L | M | Version negotiation with a minimum supported version. The protocol version is included in the attestation. | An old version gets `unsupported_version` |
 | TM-24 | Control plane compromised | L | C | It can deny service, observe metadata, and enroll and grant a new attacker phone. It cannot impersonate an *existing* enrolled phone. Host-side confirmation of newly granted phones is *proposed* for a later release. | Tabletop exercise |
@@ -178,7 +179,7 @@ Ratings: likelihood (L) and impact (I) on an H/M/L scale. C means critical.
 | Scenario | Impact | Containment | Recovery |
 |---|---|---|---|
 | **Stolen Google account** | The attacker can enroll a new phone, which starts with zero grants. They could then grant it access through the API. | A new device shows up in Activity. Revoke it, revoke other refresh families, change the Google password and enable 2-step verification. | Review the audit log for grants and connections. |
-| **Lost phone** | The attacker still needs the OS unlock, and the app lock if enabled. | Revoke the phone from another phone. Break-glass option on the server: `prw-admin device revoke`. | New tickets are denied at once and sessions detach within 30 s. Enroll the replacement phone. |
+| **Lost phone** | The attacker still needs the OS unlock, and the app lock if enabled. | Revoke the phone from another phone. A server-side break-glass command (`prw-admin device revoke`) is *planned*. | New tickets are denied at once and sessions detach within 30 s. Enroll the replacement phone. |
 | **Compromised host** | That host's shell and key are exposed. | Revoke the host. Phones then reject its key. | Rebuild the host, generate a new key and re-pair. Other hosts are unaffected. |
 | **Control plane down** | No new connections can be made. WSS-relayed and TURN-relayed sessions drop, while direct sessions continue. | None needed. Existing direct sessions run until the grant lease expires (≤ 10 min), then the agent closes them. tmux sessions keep running. | Restore the EC2 instance. Agents reconnect automatically. |
 | **Control plane compromised** | See TM-24. | Lock down the security groups and keep a disk snapshot. | Rebuild from IaC with pinned images. Rotate the signing keys, TURN secret and pairing pepper, and revoke all refresh families. Agents re-pin keys via a signed rotation statement, or re-pair if trust is lost. |
@@ -196,11 +197,13 @@ Ratings: likelihood (L) and impact (I) on an H/M/L scale. C means critical.
 | TURN credentials or secrets | Coarse platform, app version and agent version |
 | Raw SDP and candidate IP addresses | Public IP for login and pairing audit events (retained 30 days, *proposed*) |
 | Private keys and signatures | Key fingerprints, truncated to 16 hex characters in the UI |
+| Query strings and request bodies | Request method, path, status and duration (debug-level access log) |
+| | The Google subject of a **denied** sign-in, so the operator can allowlist it. It identifies an account, not a credential; the audit record stores only a hash. |
 
 Enforcement:
-- All logging goes through one package of typed `slog` attributes.
-- A lint rule forbids logging request bodies.
-- An end-to-end canary test checks that terminal content never reaches any log.
+- Logging uses `slog` with JSON output and explicit attributes. The control plane's access log runs only at debug level (`PRW_LOG_LEVEL=debug`, which the dev stack sets) and omits query strings, which can carry cursors.
+- A lint rule forbidding request-body logging is *planned*.
+- An end-to-end canary test that checks terminal content never reaches any log is *planned*.
 
 ## 10. coturn hardening
 
@@ -222,10 +225,10 @@ Subscribe to coturn security advisories. Patch critical issues within 7 days (*p
 ## 11. Supply chain and release signing
 
 - Use lockfiles (`go.sum`, `pubspec.lock`) and pin container images by digest.
-- CI runs `govulncheck`, `osv-scanner`, gitleaks and produces an SBOM (syft). Builds fail on critical findings.
-- Agent `.deb` packages and tarballs are signed. minisign with an offline key is *proposed*. SHA-256 checksums are published, and the install script verifies the signature before installing.
+- CI runs `govulncheck` and gitleaks. `osv-scanner` and an SBOM (syft) are *planned*.
+- Signed agent `.deb` packages and tarballs are *planned*. minisign with an offline key is *proposed*, with SHA-256 checksums published and the install script verifying the signature before installing. Today `agents/host/packaging/install.sh` installs a locally built binary and the user unit.
 - No auto-update in V1. Signed automatic updates, with planned key rotation, are a later item.
-- The pinned fork of the terminal renderer (xterm.dart) is reviewed like first-party code.
+- The vendored fork of the terminal renderer (xterm.dart, `apps/mobile/third_party/xterm`) is reviewed like first-party code.
 
 ## 12. Incident response
 
@@ -244,3 +247,4 @@ Subscribe to coturn security advisories. Patch critical issues within 7 days (*p
 - The shell runs with the user's full privileges. Commands are not sandboxed.
 - Whatever a coding agent prints is shown on the phone.
 - The single EC2 instance is a single point of failure for new connections and for relayed sessions.
+- Revocation pushes are best effort until outbox retries are built; the grant lease (10 min) is the backstop.

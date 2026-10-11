@@ -1,6 +1,6 @@
 # Wire Protocol (version 1)
 
-> **Status:** design, draft version 1. This document becomes normative when the protocol is frozen. Freezing also ships golden test vectors under `protocol/vectors/`. Values marked *proposed* are defaults that may be tuned.
+> **Status:** version 1, implemented in `core/prwcore`, `services/control` and `agents/host`. Parts not built yet are marked *planned*. The protocol is not frozen: golden vectors exist for frames (`protocol/vectors/frames.json`) and the rest follow at freeze time. Values marked *proposed* are defaults that may be tuned.
 
 Conventions:
 - "MUST", "SHOULD" and "MAY" follow RFC 2119.
@@ -30,7 +30,7 @@ Signed payloads are **JCS-canonical JSON** (RFC 8785). The signature covers the 
 
 ## 2. Phone sign-in and device registration
 
-Google OIDC is the only identity provider. The phone signs in through the system browser using AppAuth with PKCE, then exchanges the Google ID token for PRW tokens.
+Google OIDC is the only identity provider. The phone gets a server nonce, obtains a Google ID token bound to it through the platform Google Sign-In SDK (initialised with the server's web client ID), then exchanges the ID token for PRW tokens.
 
 **`POST /v1/auth/challenge`** returns `{nonce, exp}`:
 - `nonce` is 32 random bytes, base64url-encoded.
@@ -59,21 +59,21 @@ Google OIDC is the only identity provider. The phone signs in through the system
 ```
 
 The server performs these checks in order:
-1. It validates the ID token: `iss`, `aud`, signature against cached Google JWKS, `exp` (±60 s skew), `nonce`, and `email_verified`.
-2. It checks that `sub` is listed in `PRW_ALLOWED_SUBJECTS`. If not, it returns `403 account_not_allowed`.
+1. It validates the ID token: `iss`, `aud` (one of `PRW_GOOGLE_CLIENT_IDS`), signature against cached Google JWKS, `exp` and `nonce`. The email is stored only when `email_verified` is true.
+2. It checks that `sub` is listed in `PRW_ALLOWED_SUBJECTS`. If not, it returns `403 account_not_allowed`, audits a hash of the subject, and logs `google:<sub>` so the operator can add it.
 3. It confirms the server nonce has not been used.
 4. It verifies the proof-of-possession signature with the presented key.
 
 In **one transaction**, the server then:
 - upserts the account;
-- inserts the phone device, or rebinds it if the key fingerprint is already known;
+- inserts the phone device and its credential row, or matches the existing non-revoked device with the same key fingerprint;
 - creates an auth session;
 - writes an audit event.
 
 A new phone needs no other approval. It starts with **no grants**.
 
-The response is `{access_token, refresh_token, device_id, account}`:
-- `access_token` is an EdDSA JWT valid for 10 minutes. Its claims are `iss`, `sub` (account ID), `dev`, `kind`, `sid`, `iat`, `exp` and `kid`.
+The response is `{access_token, access_expires_at, refresh_token, refresh_expires_at, device_id, account, device}`:
+- `access_token` is an EdDSA JWT valid for 10 minutes, with `kid` in its header. Its claims are `iss`, `aud` (`prw-api`), `sub` (account ID), `did` (device ID), `kind` (`phone`), `sid` (auth session), `iat`, `exp` and `jti`.
 - `refresh_token` is opaque. It has a 30-day sliding lifetime and a 90-day absolute lifetime.
 
 **`POST /v1/auth/refresh`** takes `{refresh_token, pop: {nonce, sig}}`. The signature MUST verify against the device's active key.
@@ -81,48 +81,50 @@ The response is `{access_token, refresh_token, device_id, account}`:
 - Reusing a token that has already been rotated revokes the whole token family.
 - A revoked device receives `403 device_revoked`.
 
-**`POST /v1/auth/logout`** revokes only the current phone's auth session.
+**`POST /v1/auth/logout`** revokes the current phone's refresh-token family only.
 
 ## 3. Agent control-channel authentication
 
 The handshake on `wss://api.example.invalid/v1/agent/control` runs as follows. The agent never puts credentials in the URL.
 
 1. Server → agent: `{"type":"auth.challenge","nonce":"…","exp":…}`
-2. Agent → server: `{"type":"auth.response","device_id":"…","sig":"<ES256 JWS over JCS({purpose:'prw.agent.v1',nonce,device_id,iat})>","agent_version":"…","proto":{"min":1,"max":1}}`
-3. The server verifies the signature against the host's active key and checks that the host is active.
-4. On success, server → agent: `auth.ok`, then `grant.lease` (§13), then `jwks.update`.
-5. On failure, server → agent: `auth.error {code}`, after which the server closes the socket with code `4401`.
+2. Agent → server: `{"type":"auth.response","payload":{"device_id":"…","sig":"<ES256 JWS over JCS({purpose:'prw.agent.v1',nonce,device_id,iat})>","agent_version":"…"}}`
+3. The server consumes the nonce (single use, 1 min), verifies the signature against the host's key and checks that the host is active.
+4. On success, server → agent: `auth.ok {device_id, account_id, jwks}`, then `grant.lease` (§14).
+5. On failure, server → agent: `auth.error {code}`, after which the server closes the socket with `4401`, or `4403` for a revoked host. The agent stops for good on `4403`.
+6. If the same host logs in again, the older socket is closed with `4400`.
 
-The agent re-authenticates on every reconnect. The server re-challenges the socket every 15 minutes.
+The agent re-authenticates on every reconnect, with exponential backoff from 1 s to 30 s plus jitter. Re-challenging a long-lived socket (every 15 minutes) and pushing key rotations with `jwks.update` are *planned*.
 
-Messages the server may send to the agent form an allowlist: `auth.*`, `heartbeat.ack`, `attempt.incoming`, `attempt.cancel`, `grant.lease`, `revoke_notice`, `jwks.update`, `pairing.approved` and `server.notice`. The agent MUST drop any other message type and log the drop.
+Messages the server may send to the agent form an allowlist: `auth.*`, `heartbeat.ack`, `attempt.incoming`, `attempt.cancel`, `grant.lease`, `revoke_notice`, `signal`, and the reserved `jwks.update`, `pairing.approved` and `server.notice`. The server refuses to send anything else, and the agent drops any other message type and logs the drop.
 
 The agent sends the server:
-- `heartbeat` every 25 s, carrying `{sessions_count, tmux_available, agent_version}`;
-- `session.event` (metadata only);
-- `attempt.status`;
-- acknowledgements.
+- `heartbeat` every 25 s, carrying `payload: {agent_version, capabilities: {tmux, peers}}`. The server stores the capabilities on the device and answers `heartbeat.ack`.
+- `attempt.status` with `status` `failed`, `connected_direct`, `connected_relay`, `connected_wss`, or `ended` once a connected session closes.
+- Its own signaling (`signal`).
 
-The agent also sends its own signaling over this socket.
+**Liveness.** A socket can be half-open after a NAT remap or proxy failure: writes still appear to succeed but nothing arrives. Both sides therefore treat silence as death:
+- The server closes an agent socket that has sent nothing for 75 s (three heartbeats) with `4408 no heartbeat`, so presence goes stale promptly.
+- The agent abandons a socket on which it has received nothing for 75 s (the server acknowledges every heartbeat) and reconnects.
 
 ## 4. Pairing protocol
 
 | Step | Message | Notes |
 |---|---|---|
-| 1 | Host → `POST /v1/pairing/challenges` `{host_public_key_spki, hostname, os:{id,version}, agent_version, pop_sig}` | Unauthenticated. Rate-limited to 5 per IP per 10 min. `pop_sig` is an ES256 signature over `{purpose:'prw.pair.create.v1', spki_fp, iat}`. |
-| 2 | Server → host `{challenge_id, pairing_ref, display_code, nonce, expires_at, wait_token}` | `pairing_ref` is 16 random bytes. `display_code` is 8 Crockford base32 characters (40 bits), shown as `XXXX-XXXX`. The server stores only `HMAC(pepper,"ref:"‖ref)` and `HMAC(pepper,"code:"‖normalize(code))`. The challenge expires after 5 min. |
-| 3 | Host displays a QR code | `prw1:` + base64url(`{"v":1,"r":"<ref>","f":"<spki_fp hex>","a":"https://api.example.invalid"}`). Alongside it, the host shows the code and the first 16 hex characters of the fingerprint. |
-| 4 | Host → `GET /v1/pairing/challenges/{id}/wait` | A long poll authorized by `wait_token`. It returns on approval, expiry or rejection. |
-| 5 | Phone → `POST /v1/pairing/resolve` `{pairing_ref}` or `{display_code}` | Signed in. Each failed lookup counts against the challenge and the account. A challenge locks after 5 failures. Rate-limited to 10 per account per 10 min. |
-| 6 | Server → phone `{challenge_id, hostname, os, agent_version, host_key_fingerprint, expires_at}` | |
-| 7 | Phone verification | For a scanned QR code, `f` MUST equal `host_key_fingerprint`; otherwise the phone fails closed with `pairing_fingerprint_mismatch`. For a typed code, the user confirms the fingerprint prefix by eye. |
-| 8 | Phone → `POST /v1/pairing/challenges/{id}/approve` `{display_name?}` | The challenge becomes `approved` and is bound to the account. |
-| 9 | Server → host `pairing.approved {nonce2}` | |
-| 10 | Host → `POST /v1/pairing/challenges/{id}/complete` `{sig}` | `sig` is an ES256 signature over `{purpose:'prw.pair.complete.v1', challenge_id, nonce2, spki_fp, iat}`. |
-| 11 | Server, in one transaction | Locks the row and verifies the status, expiry and signature. Creates the host device and its credential, marks the challenge consumed, and writes audit and outbox records. |
-| 12 | Server → host `{device_id, account_display, jwks, ticket_iss, control_url}` | The host **pins** the server verification keys. |
+| 1 | Host → `POST /v1/pairing/challenges` `{host_public_key_spki, hostname, os:{id,version}, agent_version, proto, pop_sig}` | Unauthenticated. Rate-limited per IP (1 per 2 min, burst 10). `pop_sig` is an ES256 signature over `{purpose:'prw.pair.create.v1', spki_fp, iat}`. |
+| 2 | Server → host `{challenge_id, pairing_ref, display_code, expires_at, wait_token, qr_payload}` | `pairing_ref` is 16 random bytes. `display_code` is 8 Crockford base32 characters (40 bits), shown as `XXXX-XXXX`. The server stores only HMACs of the ref, the normalized code and the wait token. The challenge expires after 5 min. |
+| 3 | Host displays a QR code | `qr_payload` is `prw://pair?v=1&ref=<ref>&fp=<spki_fp hex>&api=<server base URL>`. Alongside it, the host prints the code and the grouped key fingerprint. |
+| 4 | Host → `GET /v1/pairing/challenges/{id}/wait` | A long poll (up to 25 s per request) authorized by `wait_token`. It returns `pending`, `approved` with `nonce2`, or an expiry, rejection or lock error. |
+| 5 | Phone → `POST /v1/pairing/resolve` `{pairing_ref}` or `{display_code}` | Signed in. A wrong ref or code returns 404 and cannot be tied to a challenge. A per-account rate limit is *planned*. |
+| 6 | Server → phone `{challenge_id, hostname, os, agent_version, host_key_fingerprint, expires_at, compat}` | |
+| 7 | Phone verification | For a scanned QR code, `fp` MUST equal `host_key_fingerprint`; otherwise the phone fails closed. For a typed code, the user confirms the fingerprint by eye. |
+| 8 | Phone → `POST /v1/pairing/challenges/{id}/approve` `{host_key_fingerprint, display_name?, grant_to_this_phone}` | The server compares the fingerprint again. A mismatch returns `pairing_fingerprint_mismatch` and counts as a failure; the fifth failure locks the challenge. On success the challenge becomes `approved`, is bound to the account and gets a fresh `nonce2`. |
+| 9 | Server → host | The pending `wait` long poll returns `{status: "approved", nonce2}`. (A `pairing.approved` push on the control socket is reserved but unused: an unpaired host has no control socket.) |
+| 10 | Host → `POST /v1/pairing/challenges/{id}/complete` `{sig}` | `sig` is an ES256 signature over `{purpose:'prw.pair.complete.v1', challenge_id, nonce:nonce2, spki_fp, iat}`. |
+| 11 | Server, in one transaction | Locks the row and verifies the wait token, status, expiry and signature. Creates the host device and its credential, marks the challenge consumed, creates the grant if `grant_to_this_phone` was set, and writes an audit record. |
+| 12 | Server → host `{device_id, account_id, jwks, control_ws_url}` | The host **pins** the server verification keys. |
 
-Failures return `pairing_expired`, `pairing_used` or `pairing_locked`. They never reveal whether it was the ref or the code that was wrong. A newly paired host has no grants.
+Failures return `pairing_expired`, `pairing_used`, `pairing_rejected` or `pairing_locked`. A newly paired host has no grants unless the approving phone asked for one.
 
 ## 5. Connection attempt and ticket
 
@@ -130,7 +132,7 @@ Failures return `pairing_expired`, `pairing_used` or `pairing_locked`. They neve
 
 Request: `{host_device_id, capability: "terminal", target_terminal_session_id?}`.
 
-The server checks the account, that both devices are active, that the phone holds an active and unexpired grant with the requested capability, the host's presence, and rate limits. Possible errors: `access_grant_missing`, `device_revoked`, `host_not_owned` (404), `agent_offline`, `rate_limited`, `unsupported_agent_version`.
+The server checks the account, that both devices are active, that the phone holds an active and unexpired grant with the requested capability, the host's presence, and rate limits. Possible errors: `access_grant_missing`, `device_revoked`, `not_found` (host missing or in another account), `agent_offline`, `rate_limited`, `idempotency_conflict`. An agent-version check (`unsupported_agent_version`) is *planned*. The phone SHOULD open `/v1/signaling` before this call so no early host message is missed; the server also buffers host messages for up to 15 s.
 
 ```json
 {
@@ -147,11 +149,15 @@ The server checks the account, that both devices are active, that the phone hold
      "username": "<expiry>:<attempt_id>", "credential": "<hmac>"}
   ],
   "attestation_nonce": "<32B b64url>",
-  "signaling_url": "wss://api.example.invalid/v1/signaling"
+  "signaling_url": "wss://api.example.invalid/v1/signaling",
+  "fallback": {"wss_race_after_ms": 4000},
+  "host": {"device_id": "…", "key_fingerprint": "…", "public_key_spki": "…"}
 }
 ```
 
-The host receives `attempt.incoming` carrying the same ticket, a relay token with `role=server`, and its own ICE servers.
+The phone compares `host.key_fingerprint` with the fingerprint it pinned at pairing and aborts on a mismatch (`host_key_mismatch`) before connecting.
+
+The host receives `attempt.incoming` whose `payload` carries `attempt_id`, `phone_device_id`, the same ticket, a relay token with `role=server`, and its own ICE servers.
 
 **Ticket.** A JWS with `alg=EdDSA` and `typ=prw-ticket+jwt`.
 
@@ -173,25 +179,25 @@ The host accepts the ticket only if all of the following hold:
 - the signature verifies under a pinned `kid`;
 - `aud` is the host's own ID;
 - the current time is within `nbf`/`exp`, allowing ±30 s of clock skew;
-- the `jti` has not been seen before (the host remembers it until `exp + 30 s`);
-- `sub` holds `cap` in the current grant lease;
-- the host supports `pv`.
+- `sub` matches the phone in `attempt.incoming` and `att` matches the attempt;
+- the `jti` has not been seen before (the host remembers it until `exp`);
+- `sub` holds `cap` in the current grant lease, checked again when the phone presents the ticket during attestation.
 
-New signing keys are announced through `jwks.update` at least 24 hours before they are first used, and are signed by the current key. A retired key remains valid until every ticket it signed has expired.
+Key rotation is *planned*: new signing keys will be announced through `jwks.update` before first use, signed by the current key, and a retired key will stay valid until every ticket it signed has expired.
 
 **Relay token.** A JWS (EdDSA) carrying `{att, role: client|server, dev, exp = iat + 90 s, jti}`. It is valid only on `/v1/relay`.
 
 ## 6. Signaling
 
-Phones open `/v1/signaling`. Their first frame is `{"type":"auth","access_token":…}`. Agents send signaling over their control socket instead.
+Phones open `/v1/signaling`. Their first frame is `{"type":"auth","payload":{"access_token":"…"}}`, answered with `auth.ok`. Agents send signaling over their control socket instead.
 
 Every signaling message uses this envelope:
 
 ```json
-{"v":1,"message_id":"<uuidv7>","attempt_id":"…","to_device_id":"…","type":"offer","sent_at":"…","payload":{}}
+{"type":"signal","attempt_id":"…","kind":"offer","from_device_id":"<set by the server>","payload":{}}
 ```
 
-| Type | Payload | Direction |
+| Kind | Payload | Direction |
 |---|---|---|
 | `offer` | `{sdp}` | phone → host |
 | `answer` | `{sdp}` | host → phone |
@@ -199,14 +205,13 @@ Every signaling message uses this envelope:
 | `ice_complete` | `{}` | both |
 | `tls_fingerprint` | `{sha256}` (WSS path) | both |
 | `attempt_cancel` | `{reason}` | both |
-| `attempt_status` | `{status, path_type?}` | server → both |
-| `revoke_notice` | `{scope, ids}` | server → phone |
+The server also sends two non-signal messages to phones: `{"type":"attempt_status","attempt_id","status","failure_code"}` and `{"type":"revoke_notice","scope","dedupe_key","payload"}`.
 
 The server enforces these rules:
 - The sender is derived from the authenticated socket. A client-supplied `from_device_id` is overwritten.
-- `(from, to)` MUST be the phone and host of a live attempt, in either direction.
-- Messages for expired or canceled attempts are rejected.
-- `message_id` is deduplicated using a 1024-entry LRU per socket.
+- The sender MUST be the phone or the host of a registered, unexpired attempt; the message goes to the other one.
+- Messages for unknown, expired or ended attempts are dropped.
+- Host messages for a phone with no open signaling socket are buffered (32 per attempt, for 15 s) and delivered when it connects.
 
 Limits:
 
@@ -214,10 +219,10 @@ Limits:
 |---|---|
 | Frame size | 64 KiB |
 | Messages per attempt | 100 |
-| Messages per second, per socket | 20 |
 | ICE candidates per attempt | 50 |
+| Messages per second, per socket | 20 (*planned*) |
 
-A violation closes the attempt with `signaling_limit` (WSS close code `4429`). SDP is never logged; only its hash is kept.
+A violation closes the socket with `4429 signaling_limit`. SDP is never logged. Message-ID deduplication is *planned*.
 
 ## 7. ICE configuration and TURN credentials
 
@@ -228,26 +233,26 @@ A violation closes the attempt with `signaling_limit` (WSS close code `4429`). S
   - network types udp4, udp6, tcp4 and tcp6;
   - mDNS candidates off on hosts;
   - ICE timeouts of 5 s (disconnected) and 15 s (failed), with a 2 s keepalive.
-- Candidates trickle. Relay-only mode is used solely when the diagnostic "Force relay" setting is on.
+- Candidates trickle. A diagnostic "Force relay" setting is *planned*.
 
 ## 8. Connection manager algorithm
 
 ```text
-t=0    POST /v1/connections → attempt
+t=0    open /v1/signaling, POST /v1/connections → attempt
        start ICE (offer, trickle)
-       if hint[network_id] == UDP_BLOCKED: start WSS relay now
-t=4s   if ICE not connected: start WSS relay (if not started)
+       if udp_blocked: start WSS relay now
+t=4s   if ICE not connected: start WSS relay (if not started)   [fallback.wss_race_after_ms]
 each transport on ready → run identity attestation (§10)
 first transport to finish attestation (phone side) → winner; phone sends path.select on it, closes the others
-host: commits to the transport on which path.select arrives (the phone is the controlling side)
-t=20s  no winner → fail connect_timeout (diagnostics: ice_state, turn_alloc, wss_state)
-winner == wss and ICE gathered no srflx/relay candidates → hint[network_id] = UDP_BLOCKED (24 h)
-winner == direct or turn → clear hint
+host: runs ICE and the WSS relay at once and commits to the transport on which path.select arrives
+t=20s  no winner → fail connect_timeout (report: per-path start, elapsed, error)
+host: gives up after its own 30 s window and reports attempt.status failed
+on commit: host reports attempt.status connected_*; when the session later closes, attempt.status ended
 ```
 
-`network_id` is a salted hash of the network identity (Wi-Fi SSID, or the carrier, plus the gateway where available). It is stored only on the phone.
+The client's `mode` can restrict the race to `webrtc` or `wss` for diagnostics; the default is `auto`. Caching a per-network "UDP blocked" hint on the phone is *planned*; today `udp_blocked` is only set explicitly.
 
-The reported `path_type` is `direct` (host or server-reflexive pair), `turn` (relay candidate) or `wss_relay`. The 4 s and 20 s timings are *proposed*.
+The race reports the path as `direct` (host or server-reflexive pair), `turn` (relay candidate) or `wss_relay`. The host stores it on the attempt as `path_type` `direct`, `turn_udp` or `wss_relay`. The 4 s and 20 s timings are *proposed*.
 
 ## 9. Transports
 
@@ -277,9 +282,9 @@ Each DataChannel message is exactly one frame (§12).
 | Max message | 64 KiB |
 | Rate per attempt | `PRW_RELAY_MAX_BPS`, default 2 Mbit/s |
 | Bytes per attempt | 2 GiB |
-| Concurrent relayed attempts per account | 16 |
+| Concurrent relayed attempts per account | 16 (*planned*) |
 
-The server MUST NOT inspect or log the payload. It counts bytes only. A revocation closes every splice for the affected attempts.
+The server MUST NOT inspect or log the payload. It counts bytes only. Join failures close with `4400` (no join), `4401` (bad or reused relay token), `4408` (peer did not join in time) or `4409` (both roles already joined). Closing splices on revocation is *planned*; today the host closes the revoked phone's transport, which ends the splice.
 
 **Inner TLS.**
 1. Each peer generates an ephemeral P-256 key and a self-signed certificate (`CN=prw-<attempt>`, valid for 1 h).
@@ -335,16 +340,16 @@ Envelope: `{"v":1,"type":"…","request_id":"<uuidv7>","terminal_session_id"?:�
 | `peer.identity_verified` | both | `{}` | Gate for terminal traffic |
 | `path.select` | P → H | `{}` | Sent by the phone on the transport it chose. The host commits to the transport that carries it and closes the others. |
 | `terminal.list` | P → H | `{}` | Reply: `terminal.list.result {sessions:[{id,title,status,persistent,created_at,last_attached_at,attached_clients}]}` |
-| `terminal.open` | P → H | `{title?, cols, rows, profile:"default"}` | `request_id` acts as the idempotency key. The host deduplicates for 10 min. |
+| `terminal.open` | P → H | `{title?, cols, rows, profile:"default"}` | `request_id` acts as the idempotency key. The host deduplicates for as long as the agent runs. |
 | `terminal.attach` | P → H | `{terminal_session_id, cols, rows}` | |
-| `terminal.ready` | H → P | `{terminal_session_id, stream_id, persistent, resumed, backend:"tmux"\|"pty"}` | |
+| `terminal.ready` | H → P | `{terminal_session_id, stream_id, persistent, resumed, backend:"tmux"}` | `backend: "pty"` is reserved for the planned fallback. |
 | `terminal.resize` | P → H | `{stream_id, cols, rows}` | `cols` and `rows` range from 1 to 1000. Coalesced to at most 10 per second. |
 | `terminal.detach` | P → H | `{stream_id}` | Ends the attach client only |
-| `terminal.terminate` | P → H | `{terminal_session_id, confirm:true}` | Sends SIGHUP, waits a 5 s grace period, then kills the session |
+| `terminal.terminate` | P → H | `{terminal_session_id, confirm:true}` | Kills the tmux session (`kill-session`); without `confirm` the host answers `confirm_required`. A SIGHUP-then-kill grace period is *planned*. |
 | `terminal.exit` | H → P | `{terminal_session_id, exit_code?, reason}` | |
-| `terminal.error` | H → P | `{code, request_id}` | |
+| `terminal.error` | H → P | `{code, request_id}` | Codes: `session_not_found`, `host_capacity_reached`, `bad_request`, `pty_unavailable`, `confirm_required` |
 | `flow.credit` | both | `{stream_id, bytes}` | §13 |
-| `ping` / `pong` | both | `{t}` | Every 10 s. The RTT is shown in diagnostics. |
+| `ping` / `pong` | both | `{t}` | Both sides answer `ping` with `pong`. Periodic pings (every 10 s, with RTT in diagnostics) are *planned*; today a lost transport is detected by the transport itself (ICE failure, TLS or WebSocket close). |
 | `session.revoked` | H → P | `{reason}` | Sent immediately before the host closes the transport |
 
 ## 12. Frame format
@@ -388,46 +393,47 @@ Credit is counted in payload bytes, per stream and per direction.
 |---|---|
 | Agent heartbeat | 25 s |
 | Presence | stale after 75 s, offline after 150 s |
-| Peer `ping` | every 10 s; 3 misses → transport lost |
+| Peer `ping` | every 10 s; 3 misses → transport lost (*planned*) |
 | ICE disconnected / failed | 5 s / 15 s |
-| Overall connect timeout | 20 s |
+| Overall connect timeout | 20 s on the phone, 30 s on the host |
 | WSS fallback start | 4 s |
 | Attestation | 5 s |
 | Ticket lifetime | 60 s |
 | TURN credential lifetime | 10 min |
 | Access token lifetime | 10 min |
-| Agent re-challenge | 15 min |
+| Agent control-socket silence | 75 s → reconnect (agent) / close with `4408` (server) |
+| Agent re-challenge | 15 min (*planned*) |
 | Grant lease | 10 min, renewed every 3 min |
+| App device-list refresh | every 30 s while the list is on screen |
 | Detached session idle reaping | none by default (optional `idle_kill_after`) |
 
-**Grant lease.** The server sends the agent a signed list of phones allowed on this host:
+**Grant lease.** The server sends the agent `{"type":"grant.lease","lease":"<JWS>"}`. The lease is an EdDSA JWS with `typ=prw-lease+jwt`, signed with the ticket key, whose claims list the phones allowed on this host:
 
 ```json
-{"lease_id":"…","expires_at":"…",
- "grants":[{"phone_device_id":"…","phone_key_spki":"…","caps":["terminal"],"grant_id":"…","grant_expires_at":null}],
- "sig":"<EdDSA JWS over JCS of the above>"}
+{"host":"<host device id>","iat":…,"nbf":…,"exp":"<iat + 10 min>","jti":"…",
+ "grants":[{"phone_device_id":"…","phone_key_spki":"…","caps":["terminal"],"grant_id":"…","grant_expires_at":0}]}
 ```
 
-The agent verifies the lease against its pinned keys and replaces its cache atomically. If the lease expires without renewal, for example because the control plane is unreachable, the agent:
+The server sends a fresh lease on login, every 3 minutes, and after every grant change. The agent verifies it against its pinned keys and replaces its cache atomically, closing the transports of any phone that dropped out. If the lease expires without renewal, for example because the control plane is unreachable, the agent:
 1. refuses `terminal.open` and `terminal.attach` with `lease_expired`;
 2. sends `session.revoked {reason:"lease_expired"}` to every connected peer and closes its transport;
 3. **leaves tmux sessions running**, detached.
 
 ## 15. Revocation
 
-1. **API transaction.** The API revokes the device or grant, writes an audit event, and writes an outbox row containing `revoke_notice {scope: device|grant, phone_device_id?, host_device_id?, grant_ids, revoked_at}` with a dedupe key. From this moment, new tickets and refreshes are refused.
-2. **Delivery.** The outbox worker delivers the notice to the connected agents and phones. It retries every 5 s with backoff for up to 5 min, then dead-letters the notice and raises an alert.
-3. **Agent handling.** The agent removes the matching entries from its lease cache. **Within 30 s** it sends `session.revoked` and closes every transport that belongs to the revoked phone, or every transport if the host itself was revoked. It then acknowledges with `revoke_notice.ack {dedupe_key}`.
+1. **API transaction.** The API revokes the device or grant (a device revocation also revokes its grants, its refresh tokens and its live attempts), writes an audit event, and writes an outbox row (`grant_revoked` or `device_revoked`) with a dedupe key. From this moment, new tickets and refreshes are refused, and the revoked phone's API calls return `device_revoked`.
+2. **Delivery.** The outbox worker (woken on commit, polling every 500 ms) sends each affected host a fresh lease and `{"type":"revoke_notice","scope":"grant"|"device","dedupe_key","payload"}`, and sends the phone the same notice. Delivery is best effort and attempted once; an agent that was offline gets a lease reflecting the change when it reconnects. Retries, dead-lettering and agent acknowledgements are *planned*.
+3. **Agent handling.** The agent removes the phone from its lease cache, sends `session.revoked {reason}` on each of that phone's transports and closes them.
 4. **Running sessions.** Affected tmux sessions are **detached, not killed**. The processes keep running, and the owner can reattach from another authorized phone or terminate them explicitly.
-5. **Revoked host.** The server closes the host's control socket with `4403` and refuses to re-authenticate it. The agent reports that it was removed. `prw-agent unpair --local` then clears its local configuration.
+5. **Revoked host or phone.** The server closes the revoked device's sockets with `4403` and refuses to re-authenticate a revoked host. The agent then closes every peer, exits and asks the user to run `prw-agent unpair --local` and pair again.
 6. **Missed push.** If the notice never reaches the host, the grant lease limits how long revoked access can last.
 
 ## 16. Reconnect algorithm
 
 ```text
-on transport lost (ping misses | ICE failed | WSS closed | app resumed with stale transport):
+on transport lost (ICE failed | WSS closed | app resumed with stale transport):
   state = RECONNECTING; freeze input; mark output stale
-  backoff = 0.5, 1, 2, 4, 8, 15, 15, … s (±20% jitter); stop automatic retries after 120 s
+  backoff = 0.5, 1, 2, 4, 8, 15, 15, … s   (jitter and a 120 s stop are planned)
   loop:
     ensure access token (refresh with device proof-of-possession)
     POST /v1/connections {host, cap, target_terminal_session_id}
@@ -437,7 +443,7 @@ on transport lost (ping misses | ICE failed | WSS closed | app resumed with stal
     terminal.attach {id, cols, rows}
       terminal.ready (resumed) → ATTACHED; unfreeze; show "Reconnected"
       terminal.error session_not_found | exited → stop, offer new session
-on network change: start a new attempt while the old transport is still alive
+on network change (planned): start a new attempt while the old transport is still alive
   (make-before-break) and switch on success
 ```
 
@@ -449,12 +455,14 @@ Tickets, TURN credentials and relay tokens are never reused across attempts.
 |---|---|---|
 | `unauthenticated` | 401 | after refresh |
 | `account_not_allowed` | 403, sign-in | no |
-| `device_revoked` | 403 | no |
-| `host_not_owned` | 404 | no |
+| `device_revoked` | 403 (caller) / 409 (target) | no |
+| `not_found` | 404 | no |
 | `access_grant_missing` | 403 | no |
-| `pairing_expired` / `pairing_used` / `pairing_locked` | 400 / 409 | no (new challenge) |
-| `pairing_fingerprint_mismatch` | phone | no (new challenge) |
-| `attempt_expired` / `attempt_canceled` | 409 | new attempt |
+| `pairing_expired` / `pairing_used` / `pairing_rejected` / `pairing_locked` | 410 / 409 / 409 / 423 | no (new challenge) |
+| `pairing_fingerprint_mismatch` | 409 | no (new challenge) |
+| `host_key_mismatch` | phone, before connecting | no (re-pair) |
+| `attempt_not_live` | 409 | new attempt |
+| `idempotency_conflict` | 422 | new key |
 | `agent_offline` | 409 | yes |
 | `host_capacity_reached` | 429 / peer | later |
 | `rate_limited` | 429 + `Retry-After` | yes |
@@ -462,14 +470,13 @@ Tickets, TURN credentials and relay tokens are never reused across attempts.
 | `peer_identity_mismatch` | peer | no |
 | `ticket_invalid` | peer | new attempt |
 | `lease_expired` | peer | after control plane returns |
-| `relay_unavailable` | 503 / peer | yes |
+| `relay_unavailable` | 503 / peer | yes (*planned*) |
 | `connect_timeout` | phone | yes |
 | `signaling_limit` | close `4429` | with backoff |
 | `protocol_error` | peer | no |
 | `session_not_found` | peer | no |
 | `pty_unavailable` | peer | maybe |
-| `shell_missing` | peer | no |
-| `tmux_unavailable` | peer | no |
+| `bad_request` / `confirm_required` | peer | no |
 | `internal_error` | 500 | yes |
 
 REST errors use this envelope:
@@ -484,27 +491,28 @@ Error responses MUST NOT include tokens, pairing codes, terminal bytes or TURN s
 
 | Code | Meaning |
 |---|---|
-| 4400 | Bad request |
+| 4400 | Bad request; agent socket superseded by a newer login |
 | 4401 | Authentication failed |
 | 4403 | Revoked |
-| 4408 | Timeout |
+| 4408 | Timeout (silent agent, or relay peer did not join) |
+| 4409 | Relay attempt already joined |
 | 4429 | Rate limited |
-| 4500 | Internal error |
+| 4500 | Internal error (reserved) |
 
 ## 18. Versioning and compatibility
 
 - **Protocol version.** The protocol version `pv` is an integer starting at 1, negotiated in `hello`.
-- **Supported versions.** The server supports the current and the previous version (N and N−1) for agents and apps. `/v1/connections` returns `unsupported_agent_version` when an agent is too old.
+- **Supported versions.** The server supports the current and the previous version (N and N−1) for agents and apps. Today only version 1 exists: sign-in rejects an app whose range excludes it (`unsupported_client_version`) and pairing rejects such an agent (`unsupported_agent_version`).
 - **Unknown fields.** Receivers MUST ignore unknown JSON fields.
 - **Version bumps.** A new frame `type` requires a `pv` bump.
 - **REST versioning.** The REST API is versioned in the path (`/v1`). A breaking change introduces `/v2`, and `/v1` stays available for one release cycle.
-- **Agent upgrades.** Agents report their version in heartbeats, and the app warns when an agent is older than N−1.
+- **Agent upgrades.** Agents report their version in heartbeats (shown as `software_version`). An app warning for agents older than N−1 is *planned*.
 
 ## 19. Size limits
 
 | Item | Limit |
 |---|---|
-| REST request body | 64 KiB (16 KiB for the ID token field) |
+| REST request body | 16 KiB for `/v1/auth/exchange`, 64 KiB for other auth calls, 4 KiB elsewhere |
 | Signaling frame | 64 KiB |
 | Control JSON on the data plane | 16 KiB |
 | Terminal frame payload | 16 384 bytes |
@@ -518,7 +526,7 @@ Error responses MUST NOT include tokens, pairing codes, terminal bytes or TURN s
 
 ## 20. Golden vectors
 
-`protocol/vectors/` will hold JSON fixtures. The Go and Dart test suites run against these fixtures, and CI fails if any implementation disagrees.
+`protocol/vectors/` holds JSON fixtures. Today it contains `frames.json` (frames of every type, edge lengths and invalid cases), checked by `core/prwcore/frame`. The rest of the list below is *planned* for the protocol freeze; since the phone runs the same Go core, a Dart implementation is no longer needed for the vectors.
 
 - Frames of every type, with lengths 0, 1 and 16384, the FIN flag, and invalid cases.
 - Control envelopes, including unknown fields that receivers must ignore.
