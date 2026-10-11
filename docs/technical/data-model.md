@@ -1,6 +1,6 @@
 # Data Model
 
-> **Status:** design, not yet implemented. The schema below is the proposed initial migration.
+> **Status:** implemented. The schema lives in goose migrations under `services/control/migrations/` (`00001_init.sql` to `00003_attempt_nonce.sql`), embedded in the binary and applied at startup. Some tables exist ahead of the features that will use them; they are marked *unused* below.
 
 PRW keeps account, device, grant, connection and session **metadata** in PostgreSQL 16 or later. It never stores terminal input or output, command lines, environment variables, private keys, raw tokens, or permanent TURN credentials.
 
@@ -46,21 +46,26 @@ erDiagram
 |---|---|---|
 | `accounts` | One row per operator identity. | `UNIQUE (identity_provider, identity_subject)`. Provider is limited to `google`. The allowlist lives in configuration (`PRW_ALLOWED_SUBJECTS`), not in the database. |
 | `devices` | Phones and hosts. | `kind` is `phone` or `host`. Platform is `android`, `ios` or `linux`. A P-256 SPKI public key with its fingerprint. A live fingerprint is unique per account among non-revoked devices. `admin_state` must be `revoked` exactly when `revoked_at` is set. `capabilities` JSONB holds only host-reported features (for example `tmux`) and is capped at 4 KiB. |
-| `device_credentials` | Public-key history for rotation and audit. | At most one `active` key per purpose. Composite FK to the device. |
+| `device_credentials` | Public-key history for rotation and audit. A row is written for every enrolled device. | At most one `active` key per purpose. Composite FK to the device. |
 | `auth_sessions` | Refresh-token families, phones only. | `refresh_token_hash UNIQUE`. `rotated_from_id` chains rotations; presenting an already-rotated token is reuse and revokes the whole family. Composite FK, kind fixed to `phone`. |
-| `pairing_challenges` | One-time host enrollment. | `ref_hmac`, `code_hmac` and `wait_token_hmac` are each `UNIQUE`. Status moves through `pending`, `approved`, `consumed`, `expired`, `canceled` and `locked`. `failed_attempts` triggers the lock at 5. `account_id` is set only on approval. |
+| `pairing_challenges` | One-time host enrollment. | `ref_hmac`, `code_hmac` and `wait_token_hmac` are each `UNIQUE`. Status moves through `pending`, `approved`, `consumed`, `expired`, `canceled` and `locked`. `failed_attempts` (fingerprint mismatches at approval) triggers the lock at 5. `account_id` is set only on approval. `grant_to_device_id` (migration 00002) remembers which phone asked for a grant when the host completes. |
 | `access_grants` | An explicit phone → host capability. | Composite FKs check same account and correct kinds. Partial unique index allows one active grant per pair. Optional `expires_at`. `version`. A revoked grant is never reactivated; re-granting creates a new row. |
-| `connection_attempts` | Authorized connection negotiations. | `ticket_jti UNIQUE`. `grant_id` references the authorizing grant. `path_type` is one of `direct`, `turn_udp`, `turn_tcp`, `turn_tls`, `wss_relay` or `unknown`. Idempotency key is unique per phone. Optional `target_terminal_session_id` records an attach intent. |
-| `terminal_sessions` | Metadata about host processes. The host agent is the source of truth. | `UNIQUE (host_device_id, host_session_handle)` (the tmux session name). `UNIQUE (host_device_id, client_request_id)` for idempotent creation. `backend` is `tmux` or `pty`. `persistent` flag. `version`. |
-| `session_events` | Append-only session lifecycle log. | Metadata JSON capped at 2 KiB and limited to an allowlist of keys. |
+| `connection_attempts` | Authorized connection negotiations. | `ticket_jti UNIQUE`. `grant_id` references the authorizing grant. `path_type` is one of `direct`, `turn_udp`, `turn_tcp`, `turn_tls`, `wss_relay` or `unknown`. Idempotency key is unique per phone. Optional `target_terminal_session_id` records an attach intent. `attestation_nonce` (migration 00003) is kept so an idempotent retry can re-sign the same ticket. `ended_at` is set when the attempt fails, is canceled or revoked, or when a connected session ends (the status keeps its `connected_*` value). |
+| `terminal_sessions` | Metadata about host processes (*unused*: the agent does not report session metadata yet). | `UNIQUE (host_device_id, host_session_handle)` (the tmux session name). `UNIQUE (host_device_id, client_request_id)` for idempotent creation. `backend` is `tmux` or `pty`. `persistent` flag. `version`. |
+| `session_events` | Append-only session lifecycle log (*unused*). | Metadata JSON capped at 2 KiB and limited to an allowlist of keys. |
 | `audit_events` | Security and administrative events. | Includes `request_id` and `attempt_id` for correlation and an `actor_kind`. Metadata is allowlisted and capped at 2 KiB. The application role cannot update these rows; the retention job is the only thing that deletes them. |
-| `idempotency_keys` | Makes create requests safe to retry. | `UNIQUE (device_id, operation, idempotency_key)`. Stores a digest of the request and a reference to the resulting resource, not the response body. |
-| `outbox_events` | Transactional delivery of revocation and grant events. | `dedupe_key UNIQUE`. Includes `dead_lettered_at`. |
-| `signing_keys_meta` | Public metadata for the server signing keys, used for JWKS and key pinning. | Private keys are never stored here. |
+| `idempotency_keys` | Makes create requests safe to retry (*unused*: the only Idem endpoint, `POST /v1/connections`, keeps its key on the attempt row). | `UNIQUE (device_id, operation, idempotency_key)`. Stores a digest of the request and a reference to the resulting resource, not the response body. |
+| `outbox_events` | Transactional delivery of revocation and grant events. | `dedupe_key UNIQUE`. Includes `dead_lettered_at` (not used yet: delivery is a single best-effort attempt). |
+| `signing_keys_meta` | Public metadata for the server signing keys, used for JWKS and key pinning (*unused*: the JWKS is derived from the key files). | Private keys are never stored here. |
 
-## 4. Proposed initial migration
+## 4. Initial migration
 
-The DDL below is shown as a single goose migration for readability. Implementation may split it into several ordered files.
+The DDL below is `00001_init.sql`. Two later migrations add columns:
+
+| Migration | Change |
+|---|---|
+| `00002_pairing_grant_intent.sql` | `pairing_challenges.grant_to_device_id`, with an account-scoped FK to `devices`, for "grant this phone access" at approval time |
+| `00003_attempt_nonce.sql` | `connection_attempts.attestation_nonce` (32 bytes) and `host_relay_jti`, so an idempotent retry of `POST /v1/connections` can re-sign the same ticket |
 
 ```sql
 -- +goose Up
@@ -92,7 +97,7 @@ CREATE TABLE devices (
   display_name     TEXT NOT NULL CHECK (length(display_name) BETWEEN 1 AND 120),
   public_key       BYTEA NOT NULL,                          -- SPKI DER, ECDSA P-256
   public_key_alg   TEXT NOT NULL DEFAULT 'ecdsa-p256' CHECK (public_key_alg IN ('ecdsa-p256')),
-  key_fingerprint  TEXT NOT NULL,                           -- base32(sha256(SPKI))
+  key_fingerprint  TEXT NOT NULL,                           -- hex(sha256(SPKI))
   software_version TEXT CHECK (length(software_version) <= 64),
   protocol_version INT  NOT NULL DEFAULT 1,
   capabilities     JSONB NOT NULL DEFAULT '{}'::jsonb CHECK (pg_column_size(capabilities) <= 4096),
@@ -395,18 +400,20 @@ Every query plan is checked with `EXPLAIN (ANALYZE, BUFFERS)` against a seeded d
 | **Sign-in (auth exchange)** | Read committed | 1. Verify the Google ID token and the subject allowlist, outside the transaction. 2. Upsert `accounts`. 3. Verify the device proof of possession against the server nonce. 4. Insert the phone's `devices` and `device_credentials` rows, or match an existing non-revoked device by fingerprint. 5. Insert `auth_sessions` with a new family. 6. Write the audit event. The new phone gets **no grants**. |
 | **Refresh rotation** | `FOR UPDATE` on the session row, found by hash | If the row was already rotated, this is reuse: revoke the whole family and return 401. Otherwise verify the device signature, revoke the old row, insert the successor with `rotated_from_id`, and update `last_used_at`. |
 | **Pairing create** | Single `INSERT` | Store the HMACs. Retry on a unique-key collision. |
-| **Pairing approve** (phone) | `FOR UPDATE` on the challenge | Require `pending` and unexpired, and the request fingerprint must equal the stored one. Set `approved`, `account_id` and `approve_nonce`. Write outbox and audit rows. |
-| **Pairing complete** (host) | `FOR UPDATE` on the challenge | Require `approved` and unexpired. Verify the wait-token HMAC and the host signature over the approve nonce. Insert the host's `devices` and `device_credentials` rows. Set `consumed`. A replay sees `consumed` and fails. |
-| **Failed code guess** | Separate short transaction | Increment `failed_attempts`. At 5 or more, set the challenge to `locked` and write an audit event. |
-| **Grant create** | — | Composite FKs enforce the account and kinds. Both devices must be `active`. A unique violation returns 409 `grant_exists`. Write outbox and audit rows. |
-| **Grant revoke** | `UPDATE … WHERE id, account_id, version, revoked_at IS NULL` | Zero rows updated returns 404 or 412. Mark the grant's live attempts `revoked`. Write outbox (`grant_revoked`) and audit rows. Delivery happens after commit. |
-| **Device revoke** | `FOR UPDATE` on the device | Set `admin_state='revoked'`. Revoke all of its grants, auth sessions and credentials, and mark its live attempts `revoked`. Write outbox and audit rows. |
-| **Connection attempt create** | — | Check idempotency: same digest returns the stored resource, a different digest returns 422. Re-read the grant and the device states, check host presence and rate limits. Insert the attempt with its `jti` and write audit. Sign the ticket **after** commit, from committed data only. |
-| **Session metadata ingest** (from agent) | Upsert on `(host_device_id, client_request_id)` | The agent is the source of truth. `version` drops stale updates. |
+| **Pairing approve** (phone) | `FOR UPDATE` on the challenge | Require `pending` and unexpired. If the request fingerprint differs from the stored one, increment `failed_attempts` in the same transaction (at 5, set `locked`), write an audit event and return 409. Otherwise set `approved`, `account_id`, `approve_nonce` and `grant_to_device_id`, and write an audit row. |
+| **Pairing complete** (host) | `FOR UPDATE` on the challenge | Require `approved` and unexpired. Verify the wait-token HMAC and the host signature over the approve nonce. Insert the host's `devices` and `device_credentials` rows, set `consumed`, and create the requested grant. A replay sees `consumed` and fails. |
+| **Grant create** | — | Composite FKs enforce the account and kinds. Both devices must be `active`. A unique violation returns 409 `grant_exists`. Write outbox (`grant_created`, which pushes a fresh lease) and audit rows. |
+| **Grant revoke** | `UPDATE … WHERE id, account_id, version, revoked_at IS NULL` | Zero rows updated returns 404, 409 `grant_revoked` or 412. Write outbox (`grant_revoked`) and audit rows. Delivery happens after commit. Marking the grant's live attempts `revoked` is *planned*; the host closes the connections. |
+| **Device revoke** | Version-checked `UPDATE` | Set `admin_state='revoked'`. Revoke all of its grants and auth sessions, and mark its live attempts (no `ended_at` yet) `revoked`. Write outbox and audit rows. Revoking `device_credentials` rows is *planned*. |
+| **Connection attempt create** | — | Check idempotency: the same key for the same host within 60 s, while the attempt is still `authorized`, returns the stored attempt with re-signed tokens; any other reuse returns 422. Re-read the grant and the device states, check host presence and rate limits. Insert the attempt with its `jti` and nonce, sign the ticket from the stored claims, notify the host, and write audit. |
+| **Attempt status** (from phone or agent) | `FOR UPDATE` on the attempt | Apply only valid transitions; set `connected_at` on the first `connected_*` and `ended_at` on `failed` or `canceled`. An agent `ended` report sets `ended_at` on a connected attempt without changing its status. |
+| **Session metadata ingest** (from agent) | Upsert on `(host_device_id, client_request_id)` | *Planned.* The agent will be the source of truth; `version` drops stale updates. |
 
 One-time consumption (pairing challenges, ticket `jti`) always relies on row locks or unique constraints, never on in-memory checks alone.
 
-## 7. Database roles
+## 7. Database roles (*planned*)
+
+The dev stack and tests use a single database user that owns the schema and runs the migrations at startup. The split below is the production target.
 
 | Role | Rights |
 |---|---|
@@ -416,9 +423,9 @@ One-time consumption (pairing challenges, ticket `jti`) always relies on row loc
 
 Row-level security is **deferred**. With a single operator account, tenant isolation comes from three things: account-scoped queries (the account ID always comes from the auth context), composite foreign keys, and a two-account isolation test suite. RLS becomes mandatory if PRW ever becomes multi-user.
 
-## 8. Retention
+## 8. Retention (*planned*)
 
-All values are *proposed*. The jobs run inside the control plane.
+No retention jobs run yet. All values are *proposed*; the jobs will run inside the control plane.
 
 | Data | Rule | Cadence |
 |---|---|---|
@@ -432,17 +439,13 @@ All values are *proposed*. The jobs run inside the control plane.
 
 ## 9. Migrations
 
-- **Tooling:** [goose](https://github.com/pressly/goose) SQL migrations under `migrations/`. Type-safe queries come from sqlc with pgx v5; there is no ORM.
+- **Tooling:** [goose](https://github.com/pressly/goose) SQL migrations under `services/control/migrations/`, embedded with `go:embed` and applied by `prw-control serve` at startup. Queries are hand-written SQL on pgx v5 in `internal/store`; there is no ORM and sqlc was not adopted.
 - **Forward-only in production.** Changes use expand/contract: add a nullable column, backfill it, then enforce `NOT NULL` in a later release. Down sections exist only so CI can run up → down → up.
-- **CI runs**, against a fresh PostgreSQL in testcontainers:
-  - `goose up`, `goose down-to 0` and `goose up` again;
-  - `sqlc vet`;
-  - a seed smoke test;
-  - composite-FK rejection tests (a cross-account grant and a wrong-kind grant must both fail at the database).
-- **Concurrent migrators** are prevented by goose's advisory lock.
-- **Startup check:** `/health/ready` reports not ready while the schema is behind the expected version.
+- **Tests** run against a throwaway `postgres:16-alpine` container started by `internal/dbtest` (`PRW_REQUIRE_DB=1` turns a missing Docker into a failure instead of a skip, as CI does). They cover the migrations, composite-FK rejection (a cross-account grant and a wrong-kind grant must both fail at the database) and every store and API path.
+- **Concurrent migrators** are not locked out: the provider runs without goose's session locker, which is safe while a single control-plane instance migrates at startup. Enabling the advisory lock is *planned* before running more than one instance.
+- **Startup check:** migrations run before the server listens, so `/health/ready` only has to check that the database answers.
 
-## 10. Backup and restore
+## 10. Backup and restore (*planned* with the AWS deployment)
 
 - A nightly `pg_dump` is encrypted and sent to S3 with SSE-KMS. EBS snapshots are also taken. A dump is taken immediately before every migration.
 - The restore runbook has three steps:
