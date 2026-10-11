@@ -136,7 +136,7 @@ The host accepts `terminal.*` messages only after both sides have sent `peer.ide
 - **Effect on terminals:** revocation **detaches** the revoked phone and closes its transport. The tmux session itself keeps running on the host, and can be reattached or terminated by an authorized phone.
 - **Grant lease:** the agent holds a signed grant lease (10 min, renewed every 3 min) listing the phones allowed to connect. If revocation pushes are lost, or the control plane is unreachable, the lease expires. The agent then refuses new sessions and closes existing peer connections.
 - **Immediate refusal:** new tickets are refused at once. Authorization checks always read the database (the phone's device state is re-checked on every API request); the push only speeds up enforcement.
-- **Delivery:** the push is best effort and attempted once. An agent that was offline receives a lease reflecting the change when it reconnects, and an agent whose control socket went half-open notices within 75 s and reconnects. Retries and acknowledgements are *planned*.
+- **Delivery:** A failed send to a connected agent is retried with backoff (1 s, doubling, capped at 60 s) and dead-lettered after 8 attempts with an error log. An agent that was offline receives a lease reflecting the change when it reconnects, and an agent whose control socket went half-open notices within 75 s and reconnects. Agent acknowledgements are *planned*.
 
 ---
 
@@ -247,4 +247,4 @@ Subscribe to coturn security advisories. Patch critical issues within 7 days (*p
 - The shell runs with the user's full privileges. Commands are not sandboxed.
 - Whatever a coding agent prints is shown on the phone.
 - The single EC2 instance is a single point of failure for new connections and for relayed sessions.
-- Revocation pushes are best effort until outbox retries are built; the grant lease (10 min) is the backstop.
+- Revocation pushes are retried for a few minutes, then dead-lettered; the grant lease (10 min) is the backstop.

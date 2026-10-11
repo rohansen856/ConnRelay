@@ -328,8 +328,8 @@ On SIGTERM the HTTP server shuts down gracefully; agents reconnect with jittered
 ### 5.9 Outbox worker
 
 - Every 500 ms, or immediately when kicked after a commit, it claims pending rows with `SELECT … FOR UPDATE SKIP LOCKED LIMIT 50` and pushes leases and `revoke_notice` messages to connected sockets.
-- Delivery is best effort: targets that are offline are covered by the fresh lease they get on reconnect, plus fresh authorization checks.
-- Backoff and dead-lettering of failed rows are **(planned)**; the schema already has `available_at` and `dead_lettered_at`.
+- Targets that are offline are covered by the fresh lease they get on reconnect, plus fresh authorization checks, so they are not retried.
+- A failed send to a connected agent is retried with backoff (1 s, doubling, capped at 60 s) and dead-lettered after 8 attempts with an error log (`attempts`, `available_at`, `last_error_code`, `dead_lettered_at`). Phone notices stay best effort: a revoked phone is cut off server-side.
 
 ### 5.10 Audit
 

@@ -213,7 +213,7 @@ sequenceDiagram
   H->>H: drop from lease, close L's connections
   Note over H: tmux sessions are detached, not killed
   alt host offline or push lost
-    Note over O: delivery is best effort; a reconnecting agent gets a fresh lease
+    Note over O: failed sends are retried, then dead-lettered; a reconnecting agent gets a fresh lease
     H->>H: grant lease expires (10 min, proposed) → refuse and close
   end
   L->>S: refresh / connect → 403 device_revoked
