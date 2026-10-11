@@ -9,6 +9,7 @@ import (
 	"github.com/rohansen856/connrelay/services/control/internal/apitest"
 	"github.com/rohansen856/connrelay/services/control/internal/dbtest"
 	"github.com/rohansen856/connrelay/services/control/internal/inventory"
+	"github.com/rohansen856/connrelay/services/control/internal/store"
 )
 
 func TestMain(m *testing.M) {
@@ -187,5 +188,38 @@ func TestLastPhoneNeedsConfirmation(t *testing.T) {
 	}
 	if r := a.Do("POST", "/v1/devices/"+a.ID.String()+"/revoke?confirm_last_phone=true", map[string]string{"reason": "user"}, ifMatch(v)...); r.Status != 200 {
 		t.Fatalf("confirmed revoke: %d %v", r.Status, r.Body)
+	}
+}
+
+// Revoking a grant ends its live attempts; finished ones keep their outcome.
+func TestRevokeGrantEndsLiveAttempts(t *testing.T) {
+	e, _ := setup(t)
+	a := e.SignIn("owner")
+	h := e.AddHost(a.Account, "host")
+	r := a.Do("POST", "/v1/access-grants", map[string]any{"phone_device_id": a.ID, "host_device_id": h.ID, "capabilities": []string{"terminal"}})
+	gid, v := r.Body["id"].(string), r.Version()
+	ctx := context.Background()
+	attempt := func(status string, ended bool) string {
+		id := store.NewID()
+		if _, err := e.Pool.Exec(ctx, `INSERT INTO connection_attempts (id, account_id, phone_device_id, host_device_id, grant_id,
+			requested_capability, status, ticket_jti, ticket_expires_at, attestation_nonce_hash, ended_at)
+			VALUES ($1,$2,$3,$4,$5,'terminal',$6,$7,now() + interval '1 minute','\x00', CASE WHEN $8 THEN now() END)`,
+			id, a.Account, a.ID, h.ID, gid, status, store.NewID(), ended); err != nil {
+			t.Fatal(err)
+		}
+		return id.String()
+	}
+	pending, live, done := attempt("signaling", false), attempt("connected_direct", false), attempt("connected_wss", true)
+
+	if r := a.Do("POST", "/v1/access-grants/"+gid+"/revoke", nil, ifMatch(v)...); r.Status != 200 {
+		t.Fatalf("revoke: %d %v", r.Status, r.Body)
+	}
+	for id, want := range map[string]string{pending: "revoked", live: "revoked", done: "connected_wss"} {
+		var status string
+		var ended bool
+		_ = e.Pool.QueryRow(ctx, `SELECT status, ended_at IS NOT NULL FROM connection_attempts WHERE id = $1`, id).Scan(&status, &ended)
+		if status != want || !ended {
+			t.Errorf("attempt %s: status %s ended %v, want %s and ended", id, status, ended, want)
+		}
 	}
 }

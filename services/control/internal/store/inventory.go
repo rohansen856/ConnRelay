@@ -201,9 +201,17 @@ func SetGrantExpiry(ctx context.Context, q Q, accountID, id uuid.UUID, version i
 
 // RevokeGrant revokes an active grant if version matches.
 func RevokeGrant(ctx context.Context, q Q, accountID, id uuid.UUID, version int, by uuid.UUID) (Grant, error) {
-	return scanGrant(q.QueryRow(ctx, `UPDATE access_grants SET revoked_at = now(), revoked_by_device_id = $4,
+	g, err := scanGrant(q.QueryRow(ctx, `UPDATE access_grants SET revoked_at = now(), revoked_by_device_id = $4,
 		revoke_reason = 'user', version = version + 1
 		WHERE account_id = $1 AND id = $2 AND version = $3 AND revoked_at IS NULL RETURNING `+grantCols, accountID, id, version, by))
+	if err != nil {
+		return g, err
+	}
+	// Attempts still running under this grant end with it.
+	_, err = q.Exec(ctx, `UPDATE connection_attempts SET status = 'revoked', ended_at = now()
+		WHERE grant_id = $1 AND ended_at IS NULL
+		  AND status IN ('authorized','signaling','ice_checking','relay_fallback','connected_direct','connected_relay','connected_wss')`, g.ID)
+	return g, err
 }
 
 // ---- outbox ----
