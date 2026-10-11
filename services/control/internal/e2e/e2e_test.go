@@ -360,6 +360,9 @@ func TestFullSystem(t *testing.T) {
 		t.Fatal("host did not drop the revoked phone within 30 s")
 	}
 	t.Logf("host dropped phone at %v", time.Since(start))
+	if _, a, _ := w.call("GET", "/v1/connections/"+res2.AttemptID, p.access, nil); a["status"] != "revoked" || a["ended_at"] == nil {
+		t.Fatalf("live attempt after grant revoke: %v", a)
+	}
 	if _, _, err := client.Connect(context.Background(), p.cfg("wss"), target); err == nil {
 		t.Fatal("connected after revocation")
 	} else if ae, ok := err.(*client.APIError); !ok || ae.Code != "access_grant_missing" {
