@@ -1,21 +1,26 @@
 # Contributing
 
-**Status:** Draft v1. These are the working conventions for this repository. Directories marked *(planned)* do not exist yet.
+**Status:** Draft v1. These are the working conventions for this repository. Paths marked *(planned)* do not exist yet.
 
 ## Repository layout
 
 ```text
-go.work                       # Go workspace tying the modules together (planned)
-apps/mobile/                  # Flutter app: lib/, test/, integration_test/, android/, ios/ (planned)
-core/prwcore/                 # shared Go: framing, attestation, transports, flow control, gomobile bindings (planned)
-services/control/             # control plane: cmd/prw-control, internal/{auth,devices,pairing,grants,
-                              #   attempts,signaling,relay,turncred,audit,outbox,httpapi,store} (planned)
-agents/host/                  # host agent: cmd/prw-agent, internal/{identity,controlws,session,tmux,
-                              #   pty,policy,lease}, packaging/ (planned)
-protocol/                     # normative wire specs: openapi.yaml, ws/*.schema.json, frames.md, golden/ (planned)
-migrations/                   # goose SQL migrations (planned)
+go.work                       # Go workspace: core/prwcore, services/control, agents/host, tests
+Makefile                      # vet, test, test-race, mobile, netlab, spike-s4, ci
+apps/mobile/                  # Flutter app: lib/{app,core,features,widgets}, test/, android/, ios/,
+                              #   gocore/build-aar.sh (gomobile AAR), third_party/xterm (vendored fork)
+core/prwcore/                 # shared Go: frame, flow, attest, token, transport, peer, connmgr, control,
+                              #   client (phone connect), termclient, mobile (gomobile facade)
+services/control/             # control plane: cmd/prw-control (serve, check-config, keygen), cmd/prw-labserver,
+                              #   internal/{auth,google,tokens,nonce,inventory,pairing,connections,hub,relay,
+                              #   turncred,outbox,store,db,httpx,config,server,...}, migrations/ (goose, embedded)
+agents/host/                  # host agent: cmd/prw-agent (pair, run, status, unpair, version),
+                              #   internal/{agentcfg,pairclient,lease,runtime,termserver,termstream,tmux,ptyproc},
+                              #   packaging/ (systemd user unit, install.sh)
+protocol/vectors/             # golden test vectors (frames)
+deploy/dev/                   # local development stack (devstack.sh)
 deploy/{terraform,compose,coturn,caddy,scripts}/   (planned)
-tests/{contract,integration,netlab}/               (planned)
+tests/                        # netlab (Docker NAT/TURN/proxy lab), spikes (S4, S5)
 docs/                         # project documentation
 .github/workflows/            # CI
 ```
@@ -26,34 +31,40 @@ docs/                         # project documentation
 |---|---|---|
 | Go | 1.26+ (toolchain pinned to go1.27.2 via `go.mod`) | Control plane, agent, shared core |
 | Flutter / Dart | 3.41.x / 3.11.x | Mobile app |
-| gomobile | Latest `golang.org/x/mobile` | Binding the shared core into the app. Build with `-ldflags=-checklinkname=0` (Pion's Android interface code needs it); see `apps/mobile_spike/build-aar.sh`. |
-| Docker + Compose | 29.x | testcontainers, netlab, local stack |
+| gomobile | Latest `golang.org/x/mobile` | Binding the shared core into the app. Build with `-ldflags=-checklinkname=0` (Pion's Android interface code needs it); see `apps/mobile/gocore/build-aar.sh`. |
+| Docker + Compose | 29.x | Test databases, netlab, local stack |
 | tmux | ≥ 3.0 | Persistent sessions on hosts |
 | PostgreSQL | 16 | Database, run in a container |
 | coturn | ≥ 4.18 | TURN, run in a container |
-| Terraform | ≥ 1.9 | Infrastructure |
+| Terraform | ≥ 1.9 | Infrastructure (planned) |
+| cloudflared | Current | Public URL for the local dev stack |
 | Android SDK, Xcode (macOS) | Current stable | Mobile builds; iOS builds need macOS |
 
-## Local development setup *(planned)*
+## Local development setup
+
+The full stack (Postgres, control plane and a public HTTPS URL for a real phone) runs with `deploy/dev/devstack.sh`. The [deployment guide](../operations/deployment.md#local-development-stack) covers it in detail.
 
 ```bash
-# Backend stack: Postgres + coturn + control plane on localhost
-docker compose -f deploy/compose/compose.dev.yaml up -d
-go run ./services/control/cmd/prw-control migrate up
-go run ./services/control/cmd/prw-control serve
+# Backend: Postgres (Docker) + control plane + Cloudflare quick tunnel
+deploy/dev/devstack.sh up                 # prints the public URL; `down` stops it
 
 # Host agent against the local control plane
-go run ./agents/host/cmd/prw-agent pair --server http://localhost:8080
+go build -o ~/.local/bin/prw-agent ./agents/host/cmd/prw-agent
+prw-agent pair --server "$(cat ~/.local/share/prw-dev/public_url)"
+prw-agent run
 
-# Mobile app (emulator), pointing at the local stack
-cd apps/mobile && flutter run --dart-define=PRW_API=http://10.0.2.2:8080
+# Phone app (Android device over adb)
+apps/mobile/gocore/build-aar.sh
+cd apps/mobile && flutter build apk --release \
+  --dart-define=PRW_API="$(cat ~/.local/share/prw-dev/public_url)" \
+  --dart-define=PRW_GOOGLE_SERVER_CLIENT_ID=<web client id>
 
 # Tests
-go test -race ./...
-(cd apps/mobile && flutter test)
+PRW_REQUIRE_DB=1 make test-race
+make mobile
 ```
 
-The development configuration uses throwaway keys generated by `prw-control dev-keys`. Never use production secrets locally.
+The dev stack generates throwaway keys with `prw-control keygen` into `~/.local/share/prw-dev/secrets`. Never use production secrets locally.
 
 ## Coding conventions
 
@@ -62,7 +73,7 @@ The development configuration uses throwaway keys generated by `prw-control dev-
 - Format with `gofmt`/`goimports` and lint with `golangci-lint`. The configuration lives in the repo.
 - Use `internal/` packages per bounded context. Do not share packages between the control plane and the agent except through `core/prwcore`.
 - Pass `context.Context` explicitly and put timeouts on all I/O. Use monotonic clocks for timeouts.
-- Database access uses **pgx v5 + sqlc**. SQL is parameterized only. Transaction boundaries are explicit in the service layer.
+- Database access uses **pgx v5** with hand-written, parameterized SQL only. Transaction boundaries are explicit in the service layer.
 - Log with `log/slog` (JSON). Use the redaction allowlist: log IDs, codes and durations, never payloads.
 - Return typed errors that map to the API error catalogue. Never return stack traces to clients.
 - Start processes with `exec.Command` and an argv array. **Never** concatenate strings into a shell command.
@@ -79,15 +90,15 @@ The development configuration uses throwaway keys generated by `prw-control dev-
 
 - Use goose, one change per migration, forward-only in production.
 - Follow expand/contract: add the new structure, migrate readers and writers, then remove the old structure in a later release.
-- Every migration must pass the up / down-to-0 / up test in CI.
+- Migrations live in `services/control/migrations/`, are embedded in the binary and run at startup. Schema rules are tested against a real Postgres (`internal/db/schema_test.go`, using `internal/dbtest`).
 
 ## Protocol change process
 
-The wire protocol is shared by Go and Dart, so every change goes through `protocol/`:
+The wire protocol is implemented once, in Go (`core/prwcore`), and reaches the app through the gomobile facade, so the app never re-implements framing or attestation. Every change still goes through the spec and the vectors:
 
-1. Edit the normative spec (`protocol/frames.md`, `protocol/ws/*.schema.json` or `protocol/openapi.yaml`).
-2. Add or update the **golden vectors** in `protocol/golden/`, as bytes or JSON together with the expected decoded values.
-3. Update the Go and Dart implementations. CI decodes and re-encodes every golden vector in both languages and fails on any difference.
+1. Update the normative spec in [protocol](../technical/protocol.md) (a machine-readable `protocol/openapi.yaml` and JSON Schemas are planned).
+2. Add or update the **golden vectors** in `protocol/vectors/`, as bytes or JSON together with the expected decoded values.
+3. Update the Go implementation. The tests decode and re-encode every golden vector and fail on any difference.
 4. Breaking changes bump the protocol version. The server keeps support for N−1 until telemetry has shown no N−1 clients for 14 days.
 5. Security-relevant changes, such as attestation, tickets or pairing, need a threat-model update in the same pull request.
 

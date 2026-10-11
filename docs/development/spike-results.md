@@ -5,6 +5,8 @@
 
 Every result below comes from a test or script in this repository. The commands to reproduce it are listed with each spike.
 
+> **Historical record.** After Gate A the throwaway spike app (`apps/mobile_spike/`, package `dev.prw.prw_spike`) and its on-device harness (`tests/devicelab/`) were removed; the product app in `apps/mobile/` replaced them. Commands below that need them work only from a checkout of the git history before the commit `chore(mobile): remove the spike app`. The network lab, `make spike-s4` and the S5 capture script are still current.
+
 ## Summary
 
 | Spike | Question | Result |
@@ -26,7 +28,7 @@ Every result below comes from a test or script in this repository. The commands 
 - Device: A059P running Android 16 (API 36), arm64.
 - The Flutter app embeds `prwcore` through `gomobile bind`. The phone side of each attempt runs in-process and signs its attestation with the Keystore key from S6.
 - The host is a Linux laptop on the phone's Wi-Fi hotspot.
-- Run with `make aar`, then `flutter build apk`, then `LAN_IP=… make devicelab`.
+- Run (at the time) with `make aar`, then `flutter build apk`, then `LAN_IP=… make devicelab`. These targets were removed with the spike app.
 
 | Mode | Path chosen | Connect time | RTT | 4 MiB echo, integrity-checked |
 |---|---|---|---|---|
@@ -51,7 +53,7 @@ Every result below comes from a test or script in this repository. The commands 
 **Setup.**
 - The lab control plane is exposed through a temporary Cloudflare quick tunnel.
 - The phone reaches it over its carrier network (5G); the host runs on the laptop.
-- Run with `tests/fieldlab/run.sh`.
+- Ran with `tests/fieldlab/run.sh`, which drove the spike APK. Both were removed after Gate A and are in the git history.
 
 | Mode | Path | Connect time | RTT | 1 MiB echo |
 |---|---|---|---|---|
@@ -127,7 +129,7 @@ The relay only copies opaque binary messages. Payloads are TLS 1.3 ciphertext be
 1. `tests/spikes/s5_capture_tui.sh` records a TUI's raw output inside tmux.
 2. Midway through, it resizes the window from 100×30 to 80×24.
 3. It saves tmux's screen before and after the resize as ground truth.
-4. `apps/mobile_spike/app/test/xterm_tui_test.dart` replays the same bytes into an xterm.dart `Terminal` and compares each cell.
+4. `apps/mobile/test/xterm_tui_test.dart` (originally in the spike app) replays the same bytes into an xterm.dart `Terminal` and compares each cell.
 
 | TUI | Rows mismatched (100×30 / 80×24) |
 |---|---|
@@ -166,10 +168,10 @@ Key encodings for Esc, Tab, Enter, Backspace and Ctrl chords, and bracketed past
 |---|---|
 | **`path.select`.** The phone (controlling side) chooses the winning transport and announces it, and the host commits to that transport. Without it, near-simultaneous ICE and WSS completions could leave the two sides on different paths. | `core/prwcore/connmgr`, [protocol](../technical/protocol.md) |
 | **Go toolchain moved to 1.27.2 (module minimum 1.26).** Go 1.25.5 had reachable standard-library vulnerabilities, and `golang.org/x/mobile` needs 1.26 or later. govulncheck now reports no reachable vulnerabilities. | all `go.mod`, CI |
-| **Pion on Android needs `-ldflags=-checklinkname=0`.** `wlynxg/anet` links to a `net` internal. | `apps/mobile_spike/build-aar.sh` |
+| **Pion on Android needs `-ldflags=-checklinkname=0`.** `wlynxg/anet` links to a `net` internal. | `apps/mobile/gocore/build-aar.sh` |
 | **Bounded transport close.** Tearing down Pion over TURN-TLS can stall for more than 3 s, so the close must not block reporting or reconnect. | `tests/netlab/labclient`; to carry into the app's connection lifecycle |
 | **coturn 4.18 deprecates `no-cli`.** | lab configs |
-| **App logs on some OEM builds.** Some Android builds drop app INFO logs unless `log.tag` is raised. In-app diagnostics must not depend on logcat. | `tests/devicelab/run.sh` |
+| **App logs on some OEM builds.** Some Android builds drop app INFO logs unless `log.tag` is raised. In-app diagnostics must not depend on logcat. | the former `tests/devicelab/run.sh` |
 | **Flow-control fixes:** credit after close (fixed a panic), and non-blocking input. | `core/prwcore/flow`, `agents/host/internal/termstream` |
 
 ## Open items before Gate A
@@ -182,4 +184,4 @@ Key encodings for Esc, Tab, Enter, Backspace and Ctrl chords, and bracketed past
    This needs macOS and Xcode.
 2. **Field run on a carrier network:** the WSS relay is verified over the carrier network through Cloudflare. Still open: a host on a different network from the phone, for carrier-NAT direct and TURN rates (this needs the public TURN deployment).
 3. **TURN-TLS:443 from the phone.** It is verified in the lab with Linux peers. Re-run it from the device once a public coturn with a real certificate exists.
-4. **xterm.dart fork.** Fix both defects and run the S5 replay suite in CI with recorded fixtures. Committed fixtures must be scrubbed of user names and paths.
+4. ~~**xterm.dart fork.**~~ Done: xterm 4.0.0 is vendored in `apps/mobile/third_party/xterm` with both defects fixed and guarded by `apps/mobile/test/xterm_fork_test.dart`. The S5 replay test runs when fixtures are recorded locally (they stay gitignored because captures can contain user names and paths).

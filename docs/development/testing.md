@@ -14,12 +14,15 @@
 
 | Command | What it runs | Needs |
 |---|---|---|
-| `make vet test-race` | Unit and integration tests for every Go module, including PTY/tmux tests and in-process WebRTC, TURN and relay tests | Go, tmux |
-| `make spike-app` | Flutter analyze and tests for the spike app, including the xterm.dart TUI replay when fixtures are recorded | Flutter |
+| `make vet test-race` | Unit and integration tests for every Go module, including PTY/tmux tests, in-process WebRTC, TURN and relay tests, and the full-system test (`services/control/internal/e2e`) that drives the real agent through the gomobile facade | Go, tmux; Docker for the database tests |
+| `PRW_REQUIRE_DB=1 make test-race` | The same, but database tests **fail** instead of skipping when Docker or Postgres is unavailable. CI always sets it. | Go, tmux, Docker |
+| `make mobile` | `flutter analyze` and `flutter test` for the phone app: API client, sign-in, pairing, device list (pull to refresh, polling), terminal, the xterm fork fixes, and the TUI replay when fixtures are recorded | Flutter |
+| `make ci` | `vet`, `test-race` and `mobile` | All of the above |
 | `make netlab` | Docker network lab: NAT types, TURN over UDP/TCP/TLS-443, HTTPS-proxy-only egress | Docker |
 | `make spike-s4` | tmux survival across an agent restart under `systemd --user` | systemd user session, tmux |
-| `LAN_IP=… make devicelab` | Real Android phone over adb: direct, TURN, WSS relay, auto, hardware key | adb device on the same network, spike APK installed |
-| `tests/spikes/s5_capture_tui.sh <name> <cmd>` | Records TUI fixtures for the xterm.dart replay test | tmux, the TUI |
+| `tests/spikes/s5_capture_tui.sh <name> <cmd>` | Records TUI fixtures (into `apps/mobile/test/fixtures/`, gitignored) for the xterm.dart replay test | tmux, the TUI |
+
+Manual end-to-end runs on a real phone use the local dev stack; see [deployment](../operations/deployment.md#local-development-stack).
 
 ## Test pyramid
 
@@ -169,6 +172,8 @@ See the [network matrix](#network-matrix).
 Only networks that have been tested are claimed as supported. The tested-network matrix is published with each release.
 
 ## CI pipeline stages
+
+**Implemented today** (`.github/workflows/ci.yml`): the `go` job (`make vet`, `PRW_REQUIRE_DB=1 make test-race`, govulncheck), the `mobile` job (`make mobile`), the `secrets` job (gitleaks over the full history) and the `netlab` job (manual dispatch only). The table below is the target pipeline.
 
 | # | Stage | Contents | Blocking |
 |---|---|---|---|
