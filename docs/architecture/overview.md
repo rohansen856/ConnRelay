@@ -1,6 +1,6 @@
 # Architecture Overview
 
-> **Status:** design. Implementation has not started yet. Items marked *proposed* are recommended defaults that may change once the feasibility spikes report.
+> **Status:** implemented for Linux hosts and Android, and run end to end on a real phone against the [local dev stack](../operations/deployment.md#local-development-stack). iOS, the AWS deployment (Caddy, coturn, Terraform) and the observability stack are not built yet; the sections that describe them are the target design. Values marked *proposed* are current defaults that may still be tuned.
 
 Private Remote Workspace (PRW) gives one operator secure terminal access from any number of their phones to any number of their Linux computers. It does not need a VPN product, a public SSH port or a third-party relay. All of the infrastructure is self-hosted.
 
@@ -30,13 +30,13 @@ Private Remote Workspace (PRW) gives one operator secure terminal access from an
 | Component | Technology | Runs on | Responsibility |
 |---|---|---|---|
 | **Phone app** | Flutter (Android + iOS), Riverpod, go_router, xterm.dart | Phone | Sign-in, device and grant management, pairing approval, terminal UI, connection state |
-| **prwcore** *(proposed)* | Go module, linked into the app via gomobile, used directly by the agent | Phone and host | Transports (WebRTC, WSS relay), framing, flow control, identity attestation, connection manager |
+| **prwcore** | Go module, linked into the app via gomobile (`prwcore/mobile`), used directly by the agent | Phone and host | Transports (WebRTC, WSS relay), framing, flow control, identity attestation, connection manager |
 | **Control plane** | Go single binary | EC2, behind Caddy | REST API, Google OIDC sign-in, devices, pairing, grants, connection tickets, TURN credentials, signaling, WSS relay splice, outbox, audit |
-| **Host agent** (`prw-agent`) | Go, `systemd --user` service | Linux PC, as the user (never root) | Enrollment, outbound control channel, ticket/lease enforcement, session manager (tmux / PTY) |
+| **Host agent** (`prw-agent`) | Go, `systemd --user` service | Linux PC, as the user (never root) | Enrollment, outbound control channel, ticket/lease enforcement, session manager (tmux) |
 | **PostgreSQL** | PostgreSQL 16+ | EC2 (Docker, private network) | Accounts, devices, grants, attempts, session metadata, audit, outbox |
 | **coturn** | coturn ≥ 4.18 | EC2, second Elastic IP | STUN/TURN relay for WebRTC (UDP, TCP, TLS on 443) |
 | **Caddy** | Caddy with ACME | EC2, first Elastic IP | TLS termination for REST and WebSockets on 443 |
-| **Observability** | `slog` JSON, Prometheus and exporters | EC2, agent journald | Metrics, structured logs with redaction, alerts |
+| **Observability** | `slog` JSON (request log at debug level); Prometheus and exporters *planned* | EC2, agent journald | Structured logs with redaction; metrics and alerts planned |
 
 ## 3. Overall architecture
 
@@ -71,7 +71,7 @@ flowchart LR
   end
 
   GOOGLE[("Google OIDC")]
-  UI -- "sign-in (PKCE)" --> GOOGLE
+  UI -- "Google Sign-In (ID token)" --> GOOGLE
   CORE_P -- "HTTPS / WSS" --> CADDY
   AGENT -- "outbound WSS" --> CADDY
   CORE_P <== "WebRTC direct (DTLS)" ==> AGENT
@@ -139,6 +139,7 @@ sequenceDiagram
   participant S as Control plane
   participant H as Host agent
   participant T as coturn
+  P->>S: open /v1/signaling (before the attempt, so no host message is missed)
   P->>S: POST /v1/connections (host, capability)
   S->>S: check account, both devices active, grant, presence, rate limit
   S-->>P: attempt id, signed ticket, relay token, ICE servers
@@ -155,15 +156,19 @@ sequenceDiagram
     H->>S: join /v1/relay (server)
     P--)H: inner TLS 1.3 handshake (pinned ephemeral certs)
   end
-  Note over P,H: first transport to finish attestation wins, the other is closed
-  P->>H: peer.attest (signed)
+  P->>H: peer.attest (signed, carries the ticket)
   H->>P: peer.attest (signed)
   H->>H: verify ticket, grant lease, attestation
+  Note over P,H: the first transport the phone sees attested wins: the phone sends path.select on it and closes the other
+  P->>H: path.select
+  H-->>S: attempt.status connected_*
   P->>H: terminal.open / terminal.attach
   H-->>P: terminal.ready + output
 ```
 
-If no transport is attested within 20 s, the attempt fails with `connect_timeout` and diagnostics. The 4 s and 20 s timings are *proposed*.
+The host offers both paths at once and commits to whichever transport carries the phone's `path.select`, so the two ends can never pick different winners. If no transport is attested within 20 s (the host's own window is 30 s), the attempt fails with `connect_timeout` and diagnostics. The 4 s and 20 s timings are *proposed*.
+
+When the phone later disconnects, the host reports `attempt.status ended`, and the server records `ended_at` while keeping the status (`connected_direct`, `connected_relay` or `connected_wss`) and the path the attempt used.
 
 ## 7. Terminal session lifecycle
 
@@ -172,24 +177,23 @@ stateDiagram-v2
   [*] --> requested: terminal.open accepted
   requested --> starting: tmux new-session / PTY spawn
   starting --> attached: terminal.ready
-  starting --> failed: pty_unavailable / shell_missing
+  starting --> failed: pty_unavailable / host_capacity_reached
   attached --> detached: transport lost / Disconnect / revocation
   detached --> attached: terminal.attach (new, re-attested connection)
   attached --> exited: shell exits
   detached --> exited: process exits while detached
   attached --> terminated: explicit Terminate
   detached --> terminated: Terminate from session list
-  detached --> host_rebooted: agent finds tmux gone after boot
   exited --> [*]
   terminated --> [*]
   failed --> [*]
-  host_rebooted --> [*]
 ```
 
 The **network connection lifetime is independent of the process lifetime**.
-- Each PRW session is a tmux session on a private socket, run in its own systemd scope. Disconnecting kills only the `tmux attach` client, and the shell keeps running.
+- Each PRW session is a tmux session (`prw-<uuid>`) on a private socket. The agent's `systemd --user` unit uses `KillMode=process`, so restarting the agent never kills the tmux server. Disconnecting kills only the `tmux attach` client, and the shell keeps running.
 - Reattaching starts a new attach client, and tmux redraws the screen.
-- If tmux is missing, the agent falls back to a plain PTY. That session survives disconnects but not an agent restart, and the UI labels it "not persistent".
+- tmux is required. If it is missing, the agent still connects but terminal sessions are disabled. A plain-PTY fallback without persistence is planned, not built.
+- Sessions do not survive a host reboot. Reporting them as `host_rebooted` is planned; today they simply disappear from `terminal.list`.
 
 ## 8. Revocation
 
@@ -205,12 +209,11 @@ sequenceDiagram
   S->>S: one transaction: mark revoked, revoke grants and refresh sessions, audit, outbox
   S-->>U: revoked
   Note over S: new tickets and refreshes for L are refused immediately
-  O->>H: revoke_notice (control socket)
-  H->>H: drop from lease, close L's connections within 30 s
+  O->>H: fresh grant.lease + revoke_notice (control socket)
+  H->>H: drop from lease, close L's connections
   Note over H: tmux sessions are detached, not killed
-  H-->>O: ack
   alt host offline or push lost
-    O->>O: retry with backoff
+    Note over O: delivery is best effort; a reconnecting agent gets a fresh lease
     H->>H: grant lease expires (10 min, proposed) → refuse and close
   end
   L->>S: refresh / connect → 403 device_revoked
@@ -240,8 +243,9 @@ sequenceDiagram
   end
 ```
 
-- **Backoff:** retries at 0.5 s, 1 s, 2 s, 4 s and 8 s, then every 15 s, each with ±20 % jitter. Automatic retries stop after 2 minutes.
-- **Network changes:** when the network changes (for example Wi-Fi → cellular), the app opens the new connection before closing the old one.
+- **Backoff (phone):** retries at 0.5 s, 1 s, 2 s, 4 s and 8 s, then every 15 s. Jitter and a 2-minute stop are planned.
+- **Network changes:** make-before-break (opening the new connection before closing the old one) is planned. Today the app reconnects after the old transport is lost.
+- **Host agent:** the control socket reconnects with exponential backoff from 1 s up to 30 s, with jitter. The agent also treats 75 s without any message from the server (it acknowledges every 25 s heartbeat) as a dead socket and reconnects, and the server closes an agent socket that has been silent for 75 s with `4408`. This catches half-open connections left behind by NAT remaps and proxies.
 - **No reuse:** tickets, TURN credentials and relay tokens are never reused.
 
 ## 10. Deployment and network boundaries
@@ -285,7 +289,7 @@ The app keeps these six states separate and never infers one from another.
 
 | # | State | Source of truth | Does **not** imply |
 |---|---|---|---|
-| 1 | **Device online** | Heartbeat freshness: online < 75 s, stale 75–150 s, otherwise offline | Permission, or that a connection will succeed |
+| 1 | **Device online** | A live agent socket and heartbeat freshness: online < 75 s, stale 75–150 s, otherwise offline. The app refetches the device list every 30 s while it is open. | Permission, or that a connection will succeed |
 | 2 | **Permitted** | An active, unexpired `terminal` grant for this phone → host, with both devices active | That the host is online |
 | 3 | **Connecting** | The client's attempt state machine | That a transport exists |
 | 4 | **Transport established** | Transport up **and** attestation verified both ways (shown as Direct / Relayed / Web relay) | That a terminal is open |
@@ -305,7 +309,8 @@ Input is enabled only in state 5. Losing state 4 shows *Reconnecting* with stale
 | Phone network change | Transport lost | Make-before-break reconnect and reattach |
 | App backgrounded or killed | OS suspends networking | Reconnect on resume. tmux session unaffected. |
 | Host sleeps | Presence becomes stale or offline | Reconnect after wake. tmux sessions survive suspend. |
-| Agent restart | Attach clients close | tmux survives because it runs in its own systemd scope. The phone reattaches. |
-| Host reboot | Processes lost | Agent reconciles and reports `host_rebooted` |
+| Agent restart | Attach clients close | tmux survives because the unit uses `KillMode=process`. The phone reattaches. |
+| Half-open control socket | Agent looks connected but receives nothing | Both sides give up after 75 s of silence; the agent reconnects and presence recovers |
+| Host reboot | Processes lost | Sessions are gone from `terminal.list` (a `host_rebooted` report is planned) |
 | Revocation during a session | Affected connections close within 30 s | Sessions are detached, not killed |
 | Output flood | Sender out of credit | The agent stops reading the PTY, so backpressure reaches the program. No data is dropped and memory stays bounded. |

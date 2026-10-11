@@ -1,21 +1,21 @@
 # Architecture Decision Records
 
-> **Status:** design. **Accepted** decisions have been confirmed by the product owner. **Proposed** decisions are the current recommendation and may change, for example after the feasibility spikes.
+> **Status:** **Accepted** decisions have been confirmed by the product owner or settled by the feasibility spikes and are implemented. **Proposed** decisions are the current recommendation and may change. Notes under each ADR say where the implementation still differs from the decision.
 
 | ADR | Title | Status |
 |---|---|---|
 | 001 | App-level remote terminal, not a VPN | Accepted |
 | 002 | Data plane: WebRTC primary, WSS relay fallback | Accepted (fallback timing proposed) |
-| 003 | Shared Go transport core (`prwcore`) on phone and host | Proposed |
+| 003 | Shared Go transport core (`prwcore`) on phone and host | Accepted (Android); iOS pending |
 | 004 | WSS relay with end-to-end TLS 1.3 and identity attestation | Accepted (need) / Proposed (mechanism) |
 | 005 | coturn ≥ 4.18 on a dedicated IP, ephemeral credentials, hardened | Proposed |
 | 006 | Single EC2 instance with two Elastic IPs | Accepted |
-| 007 | Google OIDC sign-in, subject allowlist, device-bound tokens, P-256 device keys | Accepted (Google only) / Proposed (details) |
-| 008 | tmux persistence backend with plain-PTY fallback | Proposed |
-| 009 | Signed tickets verified on the host, plus a grant lease | Proposed |
-| 010 | Data layer: one `devices` table, composite FKs, soft revoke, goose + sqlc + pgx | Proposed |
+| 007 | Google OIDC sign-in, subject allowlist, device-bound tokens, P-256 device keys | Accepted |
+| 008 | tmux persistence backend (plain-PTY fallback not built) | Accepted (tmux) / Proposed (fallback) |
+| 009 | Signed tickets verified on the host, plus a grant lease | Accepted |
+| 010 | Data layer: one `devices` table, composite FKs, soft revoke, goose + pgx | Accepted |
 | 011 | Metadata-only audit; no terminal content server-side | Accepted |
-| 012 | Flutter stack: Riverpod, go_router, xterm.dart | Proposed |
+| 012 | Flutter stack: Riverpod, go_router, vendored xterm.dart fork | Accepted |
 
 ---
 
@@ -81,8 +81,8 @@ Rating scale: ●●● good · ●● acceptable · ● poor.
 **Race (proposed):**
 
 1. Start ICE immediately.
-2. Start the WSS relay after 4 s without an ICE connection, or immediately if a "UDP blocked" hint is cached for the current network.
-3. The first transport to complete attestation wins; close the other.
+2. Start the WSS relay after 4 s without an ICE connection (the server sends the delay as `fallback.wss_race_after_ms`), or immediately when the client is told UDP is blocked. Caching that hint per network on the phone is planned; the app does not set it yet.
+3. The first transport to complete attestation on the phone wins. The phone announces it with `path.select` and closes the other; the host offers both paths at once and commits to whichever carries `path.select`.
 
 **Consequences:**
 
@@ -92,18 +92,18 @@ Rating scale: ●●● good · ●● acceptable · ● poor.
 
 ## ADR-003: Shared Go transport core (`prwcore`)
 
-- **Status:** Proposed, **confirmed on Android** by spike S1 (direct, TURN, WSS relay and auto modes pass on a real device; see [spike results](../development/spike-results.md)). iOS must pass the same suite before this is accepted.
+- **Status:** Accepted for Android (decision D-22): spike S1 passed direct, TURN, WSS relay and auto modes on a real device (see [spike results](../development/spike-results.md)), and the app ships the gomobile core. iOS must still pass the same suite.
 - **Context:**
   - The Flutter WebRTC plugin has known backpressure caveats: buffered amounts are cached from events, and there is no max-message-size API.
   - The libwebrtc ↔ Pion interop must be proven.
   - The WSS fallback needs TLS 1.3 over an arbitrary byte stream, which Dart's `SecureSocket` cannot wrap directly.
   - Without a shared core, framing and attestation would be written twice.
-- **Decision (proposed):** One Go module, `prwcore`, contains:
+- **Decision:** One Go module, `prwcore`, contains:
   - the Pion transport, the relay transport and `crypto/tls`
   - framing, flow control and attestation
   - the connection manager
 
-  The host agent links it directly. The phone links it with **gomobile** through a narrow API: connect, send, receive, close and diagnostics. Device-key signatures are produced by callbacks into the platform keystore, so phone private keys never enter Go memory.
+  The host agent links it directly. The phone links it with **gomobile** through the narrow `prwcore/mobile` facade (`Connect`, `Open`, `Attach`, `List`, `Input`, `Resize`, `Detach`, `Terminate`, `Close`, plus `SignPoP` for sign-in and refresh). Device-key signatures are produced by callbacks into the platform keystore, so phone private keys never enter Go memory.
 - **Spike pass criteria:**
   - Terminal bytes flow both ways on real Android and iOS devices over direct, TURN-UDP, TURN-TLS:443 and WSS.
   - App size grows by ≤ 25 MB per ABI.
@@ -121,7 +121,7 @@ Rating scale: ●●● good · ●● acceptable · ● poor.
 
 ## ADR-004: WSS relay with end-to-end TLS 1.3 and identity attestation
 
-- **Status:** The need is Accepted; the mechanism is Proposed.
+- **Status:** Accepted and implemented.
 - **Context:** DPI and proxy networks block UDP and often non-HTTPS TLS. A WebSocket to the API hostname on 443 looks like normal web traffic. The gateway terminates the outer TLS, so it must not be able to read the payload.
 - **Decision:**
   1. Phone and host each join `wss://api.example.invalid/v1/relay` with an attempt-scoped relay token and a role. The server pairs the two sockets by attempt ID and copies opaque binary messages.
@@ -141,7 +141,7 @@ Rating scale: ●●● good · ●● acceptable · ● poor.
 
 ## ADR-005: coturn ≥ 4.18 on a dedicated IP, ephemeral credentials, hardened
 
-- **Status:** Proposed.
+- **Status:** Proposed. Not deployed yet; the network lab (`make netlab`) runs coturn 4.18.0.
 - **Context:** coturn is the standard TURN server. 2026 brought several serious coturn CVEs: pre-auth memory disclosure, a mobility-ticket allocation takeover, admin SQL injection, ACL bypasses and DTLS denial of service.
 - **Decision:**
   - **Version:** pin coturn ≥ 4.18 by image digest.
@@ -175,13 +175,13 @@ Rating scale: ●●● good · ●● acceptable · ● poor.
 
 ## ADR-007: Google OIDC sign-in, allowlist, device-bound tokens, P-256 device keys
 
-- **Status:** Accepted: **Google OIDC is the only sign-in provider**. Details are Proposed.
+- **Status:** Accepted (decision D-05b): **Google OIDC is the only sign-in provider**.
 - **Context:**
   - There is a single operator, so open sign-up must be impossible.
   - Bearer tokens alone are insufficient.
   - Hardware keystores (iOS Secure Enclave, Android StrongBox) support P-256 but not Ed25519.
 - **Decision:**
-  1. **Sign-in.** The phone signs in with Google using AppAuth and PKCE. The server validates the ID token (issuer, audience, signature via JWKS, expiry, nonce, verified email) and accepts only subjects listed in `PRW_ALLOWED_SUBJECTS`.
+  1. **Sign-in.** The phone obtains a Google ID token with the platform Google Sign-In SDK (`google_sign_in`, initialised with the server's web client ID and a nonce). The server validates the ID token (issuer, audience, signature via JWKS, expiry, nonce) and accepts only subjects listed in `PRW_ALLOWED_SUBJECTS`. A denied sign-in is logged with its Google subject so the operator can add it to the allowlist.
   2. **Device registration.** The sign-in exchange also registers the phone's device public key, proven by a signature over a server nonce.
      - A new phone needs **no further approval**. It starts with no grants, and the owner then grants it access to specific hosts.
   3. **Tokens.**
@@ -190,8 +190,8 @@ Rating scale: ●●● good · ●● acceptable · ● poor.
      - Every refresh requires a fresh device-key signature.
   4. **Hosts** authenticate to the control socket by challenge–response with their device key.
   5. **Device keys** are ECDSA P-256:
-     - **Phone:** Android Keystore (StrongBox or TEE) or iOS Secure Enclave.
-     - **Host:** a PKCS#8 file with mode 0600.
+     - **Phone:** Android Keystore (StrongBox when available, otherwise TEE). iOS Secure Enclave is planned with the iOS build.
+     - **Host:** a PEM file (`host_key.pem`) with mode 0600 in a 0700 directory.
   6. **Server signing keys** are Ed25519 with key-ID rotation.
 - **Alternatives:**
   - GitHub sign-in: dropped by the product owner.
@@ -204,13 +204,13 @@ Rating scale: ●●● good · ●● acceptable · ● poor.
 
 ## ADR-008: tmux persistence backend with plain-PTY fallback
 
-- **Status:** Proposed.
+- **Status:** Accepted for tmux. The plain-PTY fallback is still Proposed and not built: without tmux, the agent connects but disables terminal sessions.
 - **Context:** Sessions must survive phone disconnects, app death and agent restarts. Prior art such as Eternal Terminal separates session identity from transport identity.
 - **Decision:**
   - **When tmux ≥ 3.0 is present:**
     - The agent creates one tmux session per PRW session (`prw-<uuid>`) on a private socket in `$XDG_RUNTIME_DIR/prw/` (directory mode 0700), using an agent-supplied config with `window-size latest` and a 50 000-line history.
     - Streaming uses `tmux attach` inside a PTY the agent owns, so tmux redraws the screen on reattach. A disconnect kills only the attach client.
-    - The agent runs as a `systemd --user` service with lingering and `KillMode=process`, and starts the tmux server through `systemd-run --user --scope`, so restarting the agent never kills tmux.
+    - The agent runs as a `systemd --user` service with lingering and `KillMode=process`, so restarting the agent never kills tmux (spike S4). Starting tmux through `systemd-run --user --scope` was considered and is not needed.
   - **Without tmux:** the agent uses a plain PTY with a bounded ring buffer. The session survives disconnects but not agent restarts, and the agent flags it as non-persistent.
 - **Alternatives:**
   - tmux control mode: structured, but needs a parser. Deferred.
@@ -218,12 +218,13 @@ Rating scale: ●●● good · ●● acceptable · ● poor.
   - An agent-held PTY only: fails the restart requirement.
 - **Consequences:**
   - The user's own `~/.tmux.conf` is not loaded.
-  - Sessions end on host reboot; the agent reconciles at startup.
+  - Sessions end on host reboot. Reconciling and reporting `host_rebooted` at startup is planned.
   - Multiple phones can attach to the same session.
+  - **Revocation detaches, never kills** (decision D-21): the revoked phone's transport is closed and its attach client ends, but the tmux session keeps running.
 
 ## ADR-009: Signed tickets verified on the host, plus a grant lease
 
-- **Status:** Proposed.
+- **Status:** Accepted and implemented. Key rotation over the control socket (`jwks.update`) is not built yet.
 - **Context:** Hosts must authorize connections without a synchronous API call, must behave predictably during a control-plane outage, and must honor revocation within 30 s.
 - **Decision:**
   - **Connection tickets:** compact JWS (Ed25519) bound to:
@@ -248,7 +249,7 @@ Rating scale: ●●● good · ●● acceptable · ● poor.
 
 ## ADR-010: Data layer
 
-- **Status:** Proposed.
+- **Status:** Accepted. Queries are hand-written on pgx v5; sqlc was not adopted.
 - **Context:** The initial schema draft had four problems:
   - It did not enforce that referenced devices belong to the same account and are the right kind.
   - It mixed administrative state with presence.
@@ -261,8 +262,8 @@ Rating scale: ●●● good · ●● acceptable · ● poor.
   - Revoke rows (soft delete) and use `ON DELETE RESTRICT`.
   - Generate UUIDv7 IDs in the application.
   - Tooling:
-    - goose migrations, forward-only in production
-    - sqlc on pgx v5 for queries
+    - goose migrations (`services/control/migrations/`, embedded and applied at startup), forward-only in production
+    - hand-written SQL on pgx v5 in `internal/store`
     - row-level security deferred, as a defence-in-depth option
 - **Alternatives:**
   - Separate phone and host tables.
@@ -284,16 +285,16 @@ Rating scale: ●●● good · ●● acceptable · ● poor.
 
 ## ADR-012: Flutter stack
 
-- **Status:** Proposed. Spike S5 confirmed the fork: xterm.dart 4.0.0 reproduces Claude Code, Codex, htop and less screens exactly, but has two defects (DECCKM ignored for arrow keys; a buffer assertion on Codex's main UI). See [spike results](../development/spike-results.md#s5-xtermdart-with-coding-agent-tuis).
+- **Status:** Accepted. Spike S5 found that xterm.dart 4.0.0 reproduces Claude Code, Codex, htop and less screens exactly but has two defects (DECCKM ignored for arrow keys; a buffer assertion on Codex's main UI). Both are fixed in the fork vendored at `apps/mobile/third_party/xterm`. See [spike results](../development/spike-results.md#s5-xtermdart-with-coding-agent-tuis).
 - **Context:** The UI must model six distinct connection and session states. xterm.dart, the only mature Flutter terminal widget, has been inactive since 2025.
 - **Decision:**
-  - **App framework:** Riverpod (with code generation) for state and go_router with auth guards for routing.
+  - **App framework:** Riverpod 2 (hand-written providers, no code generation) for state and go_router with auth guards for routing.
   - **Platform plugins:**
-    - `flutter_appauth` for Google sign-in
+    - `google_sign_in` for Google sign-in
     - `flutter_secure_storage`
     - `mobile_scanner` for QR codes
-  - **Terminal:** xterm.dart, pinned and ready to fork into the repository if fixes are needed (for example, escape-sequence filtering).
-  - **Transport:** accessed through a `TransportService` interface backed by `prwcore`, with a fake implementation for widget tests.
+  - **Terminal:** the vendored xterm.dart fork.
+  - **Transport:** the gomobile core is reached through a Kotlin bridge (MethodChannel `prw/core`, EventChannel `prw/core/events`) behind a Dart interface, with a fake implementation for widget tests.
 - **Alternatives:**
   - Bloc.
   - A custom terminal renderer: too costly.
