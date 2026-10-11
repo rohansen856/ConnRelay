@@ -1,6 +1,6 @@
 # Host Agent
 
-> **Status:** Target design. This document describes intended behaviour and is updated as the agent is implemented.
+> **Status:** Implemented for V1 and in daily use. Items still on the roadmap are marked **(planned)**; everything else describes the code as it is.
 > **Location:** `agents/host/` · **Binary:** `prw-agent` · **Platforms:** Linux amd64/arm64 (Ubuntu 22.04 / 24.04 baseline)
 
 The host agent is a small, **non-root** daemon running on each Linux computer. Its jobs:
@@ -10,17 +10,17 @@ The host agent is a small, **non-root** daemon running on each Linux computer. I
 - Accept phone connections, but only after verifying the ticket, the signed grant lease and the peer's identity.
 - Bridge terminal streams to persistent tmux sessions.
 
-It is built as a static Go binary (`CGO_ENABLED=0`).
+It is a single Go binary (`go build ./agents/host/cmd/prw-agent`).
 
 ## Principles
 
 | Principle | Consequence |
 |---|---|
-| Never root | Runs as the user's `systemd --user` service with lingering enabled. Refuses to start when `euid == 0`. |
+| Never root | Runs as the user, normally as a `systemd --user` service. `prw-agent run` refuses to start when `euid == 0`. |
 | Fail closed | No PTY without a valid lease, ticket, attestation and local policy match. |
-| Process lifetime ≠ connection lifetime | tmux runs outside the agent's cgroup. Restarting or upgrading the agent never kills a session. |
+| Process lifetime ≠ connection lifetime | tmux is a separate server process and the unit uses `KillMode=process`, so restarting or upgrading the agent never kills a session. |
 | No terminal content leaves the data channel | Logs, metrics and the control socket carry metadata only. |
-| No shell string building | Every process is started with `exec.Command(argv...)`. The shell comes from the passwd entry and must be listed in `/etc/shells`. |
+| No shell string building | Every process is started with `exec.Command(argv...)`. The shell is `$SHELL -l` (falling back to `/bin/sh`). Checking it against `/etc/shells` is **(planned)**. |
 
 ---
 
@@ -28,24 +28,20 @@ It is built as a static Go binary (`CGO_ENABLED=0`).
 
 ```text
 agents/host/
-  cmd/prw-agent/main.go
+  cmd/prw-agent/main.go   # CLI: pair | run | status | unpair --local | version
   internal/
-    config/     load + validate TOML, XDG paths, defaults
-    identity/   P-256 key generation/loading (0600), fingerprint, signer
-    enroll/     pairing flow, terminal QR rendering, key pinning
-    control/    control WSS client: auth, heartbeat, lease, attempts, revocations, signaling
-    lease/      grant-lease cache (memory + on-disk snapshot)
-    ticket/     EdDSA ticket verification against pinned keys, jti replay cache
-    peer/       per-attempt peer manager on top of prwcore (WebRTC + WSS relay)
-    session/    Manager, tmux backend, PTY backend, reconciliation, limits
-    term/       PTY attach bridge, framing, credit flow control
-    policy/     local policy (shell, max sessions, idle rules)
-    redact/     slog handler with allowlisted attributes
-    doctor/     environment checks
-  packaging/    nfpm.yaml, prw-agent.service, maintainer scripts, man page
+    agentcfg/    config directory, P-256 host key (0600), agent.json state (server, device, pinned JWKS)
+    pairclient/  pairing flow against /v1/pairing/*, terminal QR rendering
+    runtime/     control-socket client: auth, heartbeat, silence detection, lease, attempts, revocations, signaling
+    lease/       verified grant-lease cache
+    termserver/  terminal protocol server for one verified peer (open, attach, list, terminate, detach)
+    termstream/  PTY ↔ data-channel stream bridge with credit flow control
+    tmux/        private tmux server: create, attach, list, kill
+    ptyproc/     PTY process start and resize (dimensions clamped to 1–1000)
+  packaging/     prw-agent.service (systemd --user unit), install.sh
 ```
 
-The transport, framing and attestation code comes from the shared core (see [prwcore](prwcore.md)).
+The transport, framing, attestation, ticket and connection-manager code comes from the shared core (see [prwcore](prwcore.md)).
 
 ---
 
@@ -53,15 +49,13 @@ The transport, framing and attestation code comes from the shared core (see [prw
 
 | Command | Purpose |
 |---|---|
-| `prw-agent pair [--api URL] [--name NAME]` | Creates the identity key if it is missing and opens a pairing challenge. Prints a QR code, an 8-character code and the full key fingerprint. Long-polls for approval for up to 5 min, then completes with a signed proof of possession and pins the server's verification keys. Refuses if already paired unless `--force-reenroll` is passed, which creates a new key and therefore a new device. |
-| `prw-agent run` | Foreground daemon; this is what the systemd unit executes. |
-| `prw-agent status` | Paired state, device ID, fingerprint, control-connection state, lease expiry, sessions and version compatibility. Talks to the daemon over `$XDG_RUNTIME_DIR/prw/agent.sock` (0600, peer UID checked). |
-| `prw-agent sessions [list \| kill ID]` | Local session administration. The computer's owner always has local authority. |
-| `prw-agent logs [-f]` | Wraps `journalctl --user -u prw-agent`. |
-| `prw-agent doctor` | Checks tmux ≥ 3.0, linger, the user manager, clock skew (< 30 s), DNS, outbound 443, TURN UDP 3478, TURN-TLS 443, key permissions and protocol compatibility. Prints a fix for each failure. |
-| `prw-agent unpair` | Revokes this device on the server (signed request) and deletes local state. Asks before killing any PRW tmux sessions; the default is no. |
-| `prw-agent install-service` / `uninstall-service` | Installs and enables the user unit, and prompts for `sudo loginctl enable-linger $USER`, the only privileged step. |
-| `prw-agent version` | Version, supported protocol range and commit. |
+| `prw-agent pair --server URL [--name NAME] [--json]` | Creates the identity key if it is missing and opens a pairing challenge. Prints a QR code, an 8-character code and the key fingerprint, then long-polls until the phone approves (the challenge expires after 5 min). Completes with a signed proof of possession and saves the server URL, device ID and pinned verification keys. `--server` must be https (plain http only for loopback). `--json` prints the challenge for automation. Refuses if already paired. |
+| `prw-agent run` | Foreground daemon; this is what the systemd unit executes. Exits with status 3 if the computer was revoked. |
+| `prw-agent status` | Paired state, server, device ID and key fingerprint. |
+| `prw-agent unpair --local` | Forgets the enrolment on this machine. Revoke the computer from the app first. |
+| `prw-agent version` | Version. |
+
+`sessions`, `logs`, `doctor`, `install-service` and a server-side `unpair` are **(planned)**.
 
 ---
 
@@ -69,69 +63,33 @@ The transport, framing and attestation code comes from the shared core (see [prw
 
 | Path | Content | Mode |
 |---|---|---|
-| `$XDG_CONFIG_HOME/prw/agent.toml` | User configuration | 0600 |
-| `$XDG_CONFIG_HOME/prw/identity.key` | ECDSA P-256 private key, PKCS#8 PEM | 0600 (directory 0700) |
-| `$XDG_STATE_HOME/prw/state.json` | Device ID, account ID, pinned verification keys, API URL | 0600 |
-| `$XDG_STATE_HOME/prw/sessions.json` | Session ID → tmux handle and metadata; written atomically via rename | 0600 |
-| `$XDG_STATE_HOME/prw/lease.json` | Last verified grant lease, so an agent restart during a control-plane outage still honours an unexpired lease | 0600 |
+| `$XDG_CONFIG_HOME/prw/host_key.pem` (default `~/.config/prw/`) | ECDSA P-256 private key | 0600 (directory 0700) |
+| `$XDG_CONFIG_HOME/prw/agent.json` | Server URL, control WebSocket URL, device ID, account ID, pinned ticket-key JWKS | 0600 |
 | `$XDG_RUNTIME_DIR/prw/tmux.sock` | Private tmux server socket | 0600 (directory 0700) |
-| `$XDG_RUNTIME_DIR/prw/agent.sock` | Local admin socket | 0600 |
 
-The agent refuses to start if the key or state files are readable by group or others.
-
-```toml
-# ~/.config/prw/agent.toml
-api_url = "https://api.example.invalid"
-display_name = "workstation"
-
-[terminal]
-backend = "auto"              # auto | tmux | pty
-default_shell = ""            # empty = passwd shell (must be in /etc/shells)
-start_dir = "~"
-max_sessions = 20
-idle_detached_ttl = "0"       # 0 = never auto-kill detached sessions
-env_allowlist = ["LANG", "LC_ALL", "TZ"]
-
-[limits]
-max_attached_streams = 8
-output_buffer_bytes = 1048576
-
-[policy]
-allow_concurrent_attach = true
-on_revoke = "detach"          # revocation closes connections; tmux sessions keep running
-lease_grace = "10m"
-
-[log]
-level = "info"
-```
+`PRW_AGENT_CONFIG_DIR` overrides the configuration directory (tests, several agents on one machine). The agent has no configuration file yet: limits are code constants (§6.3). A TOML configuration file, a persisted lease snapshot and a local admin socket are **(planned)**.
 
 ---
 
 ## 4. systemd user unit
 
+`agents/host/packaging/install.sh path/to/prw-agent` installs the binary to `~/.local/bin` and the unit below to `~/.config/systemd/user/`, without root.
+
 ```ini
-# /usr/lib/systemd/user/prw-agent.service
+# ~/.config/systemd/user/prw-agent.service
 [Unit]
 Description=Private Remote Workspace host agent
 After=network-online.target
 Wants=network-online.target
 
 [Service]
-Type=notify
-ExecStart=/usr/bin/prw-agent run
-Restart=on-failure
-RestartSec=2s
-RestartPreventExitStatus=0
-# Only the agent process is stopped on restart; tmux lives in its own scope (§6.2).
+Type=exec
+ExecStart=%h/.local/bin/prw-agent run
+Restart=always
+RestartSec=3
 KillMode=process
-TimeoutStopSec=10s
-WatchdogSec=60s
 NoNewPrivileges=yes
-LockPersonality=yes
-RestrictRealtime=yes
-SystemCallArchitectures=native
-MemoryMax=512M
-TasksMax=256
+PrivateTmp=no
 UMask=0077
 
 [Install]
@@ -140,9 +98,9 @@ WantedBy=default.target
 
 Notes on the unit:
 
-- `loginctl enable-linger` keeps the user manager running without a login session, which keeps the agent and tmux alive. `doctor` verifies that it is enabled.
-- `ProtectHome` and `PrivateTmp` are deliberately **not** set. Shells must see the real home directory, and they are not children of this unit anyway.
-- `systemctl --user restart prw-agent` must leave every tmux session alive. This is covered by an integration test.
+- `KillMode=process` is required: tmux is started by the agent, and only the agent process may be stopped on restart. `tests/spikes/s4_systemd_restart.sh` (`make spike-s4`) verifies that `systemctl --user restart prw-agent` leaves sessions alive.
+- `loginctl enable-linger $USER` keeps the user manager running without a login session, which keeps the agent and tmux alive while logged out.
+- `ProtectHome` and `PrivateTmp` are deliberately **not** set. Shells must see the real home directory.
 
 ---
 
@@ -150,97 +108,58 @@ Notes on the unit:
 
 ```mermaid
 stateDiagram-v2
-  [*] --> init: load config, check permissions, load identity
-  init --> unpaired: no state.json
-  unpaired --> [*]: exit 3 ("run prw-agent pair")
-  init --> reconcile: paired
-  reconcile --> connecting: tmux state vs sessions.json
-  connecting --> online: signed challenge accepted
+  [*] --> init: refuse root, load agent.json and host key
+  init --> [*]: not paired (exit 1, "run prw-agent pair")
+  init --> connecting: paired
+  connecting --> online: signed challenge accepted (auth.ok)
   connecting --> backoff: error
-  backoff --> connecting: 1 s → 60 s, full jitter
-  online --> backoff: socket lost
-  online --> revoked: revoke_notice(host) / close 4403
-  revoked --> [*]: close peers, detach sessions, wipe state, exit 0
-  online --> draining: SIGTERM
-  draining --> [*]: notify peers, close transports, flush metadata
+  backoff --> connecting: 1 s doubling to 30 s, jittered
+  online --> backoff: socket lost or silent for 75 s
+  online --> revoked: close 4403
+  revoked --> [*]: exit 3 ("unpair --local and pair again")
+  online --> [*]: SIGTERM / SIGINT
 ```
 
 | Signal | Behaviour |
 |---|---|
-| `SIGTERM` / `SIGINT` | Graceful drain within 10 s. Peers are told the session was detached, `sessions.json` is flushed, and tmux is untouched. |
-| `SIGHUP` | Reload limits and log level. Changes to identity or API URL need a restart. |
-| `SIGQUIT` | Goroutine dump to the journal. Contains no terminal content. |
+| `SIGTERM` / `SIGINT` | Cancels the root context: peers are closed, attach clients detach, and tmux is untouched. |
+
+Graceful drain notices to peers, `SIGHUP` reload and session reconciliation on start are **(planned)**.
 
 ---
 
-## 6. Session manager
+## 6. Sessions (tmux)
 
-```go
-type Backend interface {
-    Name() string     // "tmux" | "pty"
-    Persistent() bool
-    Create(ctx context.Context, spec SessionSpec) (Handle, error)
-    Attach(ctx context.Context, h Handle, cols, rows int) (Stream, error) // io.ReadWriteCloser + Resize
-    List(ctx context.Context) ([]Handle, error)
-    Terminate(ctx context.Context, h Handle, grace time.Duration) (exitCode *int, err error)
-    Status(ctx context.Context, h Handle) (State, error) // running | exited(code) | gone
-}
-```
-
-### 6.1 tmux backend (default when tmux ≥ 3.0)
-
-The agent runs its own tmux server on a private socket. The user's own tmux server is never touched, and only sessions named `prw-<uuid>` are managed.
+The agent runs its own tmux server (≥ 3.0) on a private socket. The user's own tmux server is never touched, and only sessions named `prw-<id>` are managed. If tmux is missing or too old, the agent still connects and pairs, but terminal sessions are disabled and it logs a warning; a plain-PTY fallback is **(planned)**.
 
 | Operation | Command (argv; never via a shell) |
 |---|---|
-| Server options | `tmux -S $SOCK -f /dev/null start-server`, then `set -g`: `default-terminal tmux-256color`, `history-limit 50000`, `window-size latest`, `remain-on-exit on`, `status off`, `set-titles off`, `escape-time 10`, `allow-passthrough off`, `set-clipboard off` |
-| Create | `tmux -S $SOCK new-session -d -s prw-<uuid> -x C -y R -c <dir> -e TERM=… -- <shell> -l` |
-| Attach | Allocate a PTY (`creack/pty`), set its size, and run `tmux -S $SOCK attach-session -t prw-<uuid>` on it. Bridge the PTY bytes to the terminal stream. tmux repaints the full screen on attach, so the screen is correct after a reconnect. |
-| Detach | Close the attach PTY. The tmux client exits and the session keeps running. |
-| Resize | `pty.Setsize` (`TIOCSWINSZ`) on the attach PTY. With `window-size latest`, tmux follows the most recent client. |
-| List / status | `list-sessions -F '#{session_name}\t#{session_created}\t#{session_attached}\t#{pane_dead}\t#{pane_dead_status}\t#{pane_pid}'` |
-| Terminate | `kill-session` (sends SIGHUP to the pane process group). If the process is still alive after 5 s, send SIGKILL to the `pane_pid` group. |
-| Exit detection | When `pane_dead=1`, read `pane_dead_status`, report `exited(code)`, then kill the dead session. |
+| Create | `tmux -S $SOCK new-session -d -s prw-<id> -x C -y R …` running `$SHELL -l` in the home directory, then per-session options: `status off`, `history-limit 50000`, `remain-on-exit off`, `window-size latest`, `aggressive-resize on` |
+| Attach | Allocate a PTY, set its size, and run `tmux attach-session -t prw-<id>` on it. Bridge the PTY bytes to the terminal stream. tmux repaints the full screen on attach, so the screen is correct after a reconnect. |
+| Detach | Close the attach PTY. The tmux client exits and the session keeps running. Every attach is detached when the transport drops. |
+| Resize | `TIOCSWINSZ` on the attach PTY, clamped to 1–1000 cells. With `window-size latest`, tmux follows the most recent client. |
+| List | `list-sessions` on the private socket. |
+| Terminate | `kill-session` (explicit user action only). |
 
 Several phones may attach to the same session at once, and every attached phone can type.
 
-### 6.2 Process isolation
+### 6.1 Process isolation
 
-The tmux server is started inside its own transient scope:
+tmux runs as its own server process. Under the systemd unit (`KillMode=process`) an agent restart stops only the agent, so shells survive. Moving the tmux server into its own `systemd-run --user --scope` slice with optional limits is **(planned)**.
 
-```text
-systemd-run --user --scope --unit=prw-tmux --slice=prw.slice -p MemoryMax=… -p TasksMax=… tmux -S $SOCK …
-```
+### 6.2 Persistence
 
-Shells therefore live in `prw.slice`, outside the agent's cgroup. Restarting the agent cannot reap them, and optional per-slice limits apply. The limits are unlimited by default, because coding agents need memory. If `systemd-run` is unavailable, the agent falls back to `setsid` and `doctor` prints a warning.
+Sessions survive disconnects and agent restarts; after an agent restart they are found again with `list-sessions`. They do not survive a host reboot.
 
-### 6.3 PTY fallback (no tmux)
+### 6.3 Limits
 
-When tmux is unavailable, the agent spawns the shell directly on a PTY (`Setsid`, `Setctty`). It keeps a 256 KiB output ring buffer and supports detach and reattach. On reattach it replays the ring buffer after `ESC c`; this replay is best effort.
-
-These sessions are reported with `persistent: false` and **do not survive an agent restart**; the app labels them "non-persistent". On shutdown the agent sends SIGHUP to each PTY process group.
-
-### 6.4 Reconciliation
-
-Reconciliation runs on start and every 60 s:
-
-1. Compare `tmux list-sessions` with `sessions.json`.
-2. Adopt any unknown `prw-*` sessions as `detached`. This covers recovery after an agent crash.
-3. Mark sessions that are known but missing as `exited`. If `/proc/sys/kernel/random/boot_id` changed, mark them `host_rebooted` instead.
-4. Send the differences to the server as `session.event` metadata.
-
-Sessions do not survive a host reboot.
-
-### 6.5 Limits
-
-| Limit | Default | Enforced in |
+| Limit | Value | Enforced in |
 |---|---|---|
-| Sessions per host | 20 | Manager `Create` → `host_capacity_reached` |
-| Attached streams per host | 8 | Peer layer |
-| Concurrent peer connections | 8 | Peer layer |
-| Output buffer per stream | 1 MiB | Term bridge (stops reading the PTY when full) |
-| Control message size | 16 KiB | prwcore |
-| Session creation rate | 10/min per phone | Manager |
+| Sessions per host | 20 | `termserver` (`host_capacity_reached`) |
+| Concurrent peer connections | 8 (`runtime.MaxPeers`) | runtime (`host_capacity_reached`) |
+| Connect window per attempt | 30 s | runtime |
+| Terminal dimensions | 1–1000 cols/rows | `ptyproc` |
+| Frame payload | 16 KiB | prwcore `frame` |
 
 ---
 
@@ -248,13 +167,15 @@ Sessions do not survive a host reboot.
 
 | Aspect | Design |
 |---|---|
-| Transport | `coder/websocket` to `wss://api.example.invalid/v1/agent/control`, subprotocol `prw.v1`, system TLS roots. No credentials in the URL. |
-| Auth | The server sends `auth.challenge{nonce}`. The agent replies `auth.response{device_id, sig, agent_version, proto{min,max}}`, where `sig` is an ES256 JWS over JCS `{purpose:"prw.agent.v1", nonce, device_id, iat}`. The server answers `auth.ok`, then `grant.lease` and `jwks.update`. The server re-challenges every 15 min, and every reconnect does full re-authentication. |
-| Inbound allowlist | `auth.*`, `heartbeat.ack`, `attempt.incoming`, `attempt.cancel`, `grant.lease`, `revoke_notice`, `jwks.update`, `pairing.approved`, `server.notice`, plus signaling for this host's live attempts. Any other type is dropped and logged as a security event. |
-| Heartbeat | Every 25 s: `{sessions_count, tmux_available, agent_version, peers}`. |
-| Backoff | 1 s, doubling to a 60 s cap, with full jitter. Reset after 60 s of stable connection. |
-| Signaling | `offer`, `answer`, `ice_candidate`, `ice_complete`, `tls_fingerprint` and `attempt_cancel` are multiplexed on the control socket. |
-| Key rotation | `jwks.update` is accepted only over the authenticated socket and only when signed by a currently pinned key. |
+| Transport | `coder/websocket` to the `control_ws_url` saved at pairing (`wss://…/v1/agent/control`), subprotocol `prw.v1`, system TLS roots. No credentials in the URL. |
+| Auth | The server sends `auth.challenge{nonce}`. The agent replies `auth.response` with an ES256 JWS over JCS `{purpose:"prw.agent.v1", nonce, device_id, iat}`. The server answers `auth.ok`, then `grant.lease`. Every reconnect does full re-authentication. |
+| Inbound allowlist | `grant.lease`, `revoke_notice`, `attempt.incoming`, `attempt.cancel`, `signal`, `heartbeat.ack`, `jwks.update`, `server.notice`, `pairing.approved`. Any other type is dropped and logged. |
+| Heartbeat | Every 25 s: `{agent_version, capabilities{tmux, peers}}`. The server answers `heartbeat.ack`. |
+| Silence detection | Each read has a 75 s deadline (`runtime.SilenceLimit`, 3 heartbeats). A socket that delivers nothing for that long is treated as half-open (for example after a NAT remap or a proxy drop), abandoned and re-dialled. The server applies the same limit from its side and closes silent agent sockets with 4408. |
+| Backoff | 1 s, doubling to a 30 s cap, jittered. Reset after a connection that stayed up. |
+| Signaling | WebRTC offers, answers and candidates, `tls_fingerprint` and `attempt_cancel` are multiplexed on the control socket as `signal` messages. |
+| Attempt status | `attempt.status` reports `failed` (with a failure code), `connected_direct` / `connected_relay` / `connected_wss` and, when the terminal session closes, `ended`. |
+| Key rotation | `jwks.update` is accepted but not yet applied; rotation is **(planned)**. |
 
 ### 7.1 Grant lease
 
@@ -262,20 +183,21 @@ The server pushes `grant.lease` on connect, on any grant or device change, and e
 
 The agent:
 
-- Verifies the lease signature against the pinned keys, replaces its cache atomically and persists it to `lease.json`.
+- Verifies the lease signature against the pinned keys and replaces its in-memory cache atomically. Persisting it across restarts is **(planned)**.
 - Uses **only the phone key in the lease**, never a key supplied by the peer, to verify phone attestations.
-- Re-checks every 30 s, and on every lease update, that each connected phone is still listed. If a phone is no longer listed, it sends `session.revoked` and closes that phone's connection.
+- On every lease update, closes the connections of phones that are no longer listed. Every 5 s it checks that the lease is still valid; once it expires, every peer is closed with `lease_expired`.
 
-**Control-plane outage.** Existing connections continue until the lease expires. After that the agent refuses `terminal.open` and `terminal.attach` with `lease_expired` and closes its peers. tmux sessions keep running. New connections are impossible while the control plane is down, because both signaling and the relay depend on it.
+**Control-plane outage.** Existing connections continue until the lease expires. After that the agent closes its peers and refuses new ones. tmux sessions keep running. New connections are impossible while the control plane is down, because both signaling and the relay depend on it.
 
 ### 7.2 Revocation
 
 When the agent receives `revoke_notice{scope, ids, dedupe_key}`:
 
 1. Update the lease cache immediately.
-2. Send `session.revoked` to, and close, every connection belonging to the revoked phone or grant. If the host itself was revoked, close every connection. The target is under 1 s, and the hard limit is 30 s.
+2. Close every connection belonging to the revoked phone or grant (`access_revoked`). If the host itself is revoked, the server closes the control socket with 4403 and the agent exits. The target is under 1 s, and the hard limit is 30 s (tested end to end).
 3. **Detach** the affected tmux sessions. They are not killed; processes keep running and remain reachable from phones that are still authorized.
-4. Acknowledge with `revoke_notice.ack{dedupe_key}`.
+
+`revoke_notice.ack` is **(planned)**.
 
 ---
 
@@ -289,11 +211,11 @@ sequenceDiagram
   participant A as Agent
   participant P as Phone
   S->>A: attempt.incoming {attempt, phone, ticket, relay_token, ice_servers}
-  A->>A: phone in lease with "terminal"? peers < 8? not draining?
+  A->>A: ticket valid for this host? phone in lease with "terminal"?
   par WebRTC
     P-->>A: offer / candidates (via control socket)
     A-->>P: answer / candidates
-  and WSS relay (after 4 s or UDP-blocked hint)
+  and WSS relay (offered at once; the phone picks the winner)
     A->>S: /v1/relay join (role=server), inner TLS 1.3 server
   end
   P->>A: hello, peer.attest {jws, ticket}
@@ -325,7 +247,7 @@ Any failure → `ticket_invalid`.
 
 Any failure → `peer_identity_mismatch`.
 
-Until both sides have sent `peer.identity_verified`, any message other than the handshake causes `protocol_error` and the connection is closed. Every failure is also reported to the server as `attempt.status{failed, failure_code}`.
+Until both sides have sent `peer.identity_verified`, any message other than the handshake causes `protocol_error` and the connection is closed. Every failure is also reported to the server as `attempt.status{failed, failure_code}`. After the phone's session closes, the agent reports `attempt.status{ended}` so the server records `ended_at`.
 
 ---
 
@@ -340,30 +262,28 @@ Until both sides have sent `peer.identity_verified`, any message other than the 
 
 ## 10. Logging and privacy
 
-- slog writes JSON to stdout, which goes to the journal.
-- A redaction handler only emits allowlisted attribute keys:
+- slog writes JSON to stderr, which goes to the journal under systemd.
+- Log sites only use metadata attributes. A redaction handler that enforces an allowlist is **(planned)**; the target allowlist is:
   - `attempt_id`, `session_id`, `device_id`
   - `path_type`, `reason`, `duration_ms`
   - `bytes_in`, `bytes_out`
   - `cols`, `rows`, `backend`
   - `exit_code`, `error_code`
 - **Never logged:** tickets, tokens, nonces, signatures, SDP, candidate IPs, environment variables, argv beyond the shell's basename, working directories, terminal bytes. Candidate *types* can be logged at debug level behind `--debug-network`.
-- A unit test pushes marked secrets through every log site and asserts that none of them appear in the output.
+- A unit test that pushes marked secrets through every log site is **(planned)**.
 
 ---
 
 ## 11. Packaging, release and upgrades
 
-| Item | Design |
-|---|---|
-| Build | `goreleaser`, linux/amd64 + linux/arm64, `-trimpath`, version injected at build time |
-| Packages | `.deb` (via `nfpm`) containing `/usr/bin/prw-agent`, `/usr/lib/systemd/user/prw-agent.service`, a man page and the licence. `tmux (>= 3.0)` is *Recommends*. A tarball is also published. |
-| Signing | `SHA256SUMS` signed with minisign, plus an SPDX SBOM (syft). The verification command is documented in the install guide. |
-| Install | Download the `.deb` → verify the signature → `sudo apt install ./prw-agent_*.deb` → `prw-agent install-service` → `prw-agent pair`. There is no `curl \| sh` installer. |
-| Upgrade | Manual for now: install the new package, then `systemctl --user restart prw-agent`. Sessions survive the restart. The agent reports its version in every heartbeat, and the server flags agents older than N−1. |
-| Compatibility | The server supports protocol versions N and N−1. An agent that is too old is rejected with `426`; it keeps retrying with backoff, and `status` explains why. |
+| Item | Today | Planned |
+|---|---|---|
+| Build | `go build -o ~/.local/bin/prw-agent ./agents/host/cmd/prw-agent` | `goreleaser`, linux/amd64 + linux/arm64, `-trimpath`, version injected |
+| Install | `agents/host/packaging/install.sh`, then `prw-agent pair --server URL` and `systemctl --user enable --now prw-agent` | `.deb` via `nfpm`, with `tmux (>= 3.0)` as *Recommends*, plus a tarball |
+| Signing | — | `SHA256SUMS` signed with minisign, plus an SPDX SBOM |
+| Upgrade | Replace the binary, then `systemctl --user restart prw-agent`. Sessions survive. | Signed update manifest with rollback |
 
-Automatic updates, with a signed manifest and rollback, are planned for later.
+The agent reports its version in every heartbeat.
 
 ---
 
@@ -371,10 +291,9 @@ Automatic updates, with a signed manifest and rollback, are planned for later.
 
 | Layer | Coverage |
 |---|---|
-| Unit | Config validation, file-permission checks, the ticket verification table (bad signature, wrong `aud`/`sub`/`att`/`cap`, expiry, skew, replay, unknown `kid`), lease expiry, attestation (including fingerprint mismatch), frame codec golden vectors, credit accounting, redaction, backoff. |
-| Integration (real tmux) | Create, attach, `echo`, detach, reattach and compare the screen. Resize, then `stty size`. Terminate with an exit code. A 50 MB flood with a slow consumer (bounded memory, checksum intact). Reconciliation after `kill -9`. Agent restart under `systemd --user` keeps sessions. PTY fallback when tmux is absent. |
-| Integration (with control plane) | Pair a headless agent through an API-driven phone simulator. Lease delivery. Revoke closes the peer in under 30 s. Lease expiry during a simulated outage. An attempt for an ungranted phone is rejected. A tampered lease or key update is rejected. |
-| Security | Refuses root. Refuses a world-readable key. Cross-host session IDs are rejected. Messages before `identity_verified` are rejected. Oversized frames are rejected. Session titles containing shell metacharacters stay inert. |
-| Performance | Idle RSS ≤ 64 MiB. Echo latency over loopback. 8 concurrent streams under flood. |
-| Operations | `doctor` on clean Ubuntu 22.04 and 24.04. Package install, upgrade and uninstall. Warning when linger is missing. |
-| Fuzz | Frame decoder, control JSON decoder, ticket parser, tmux `list-sessions` parser. |
+| Unit | Key and state files (permissions), lease verification and expiry, PTY start and dimension clamping, termstream credit flow. |
+| Integration (real tmux) | Create, attach, type, detach, reattach and compare the screen; resize; terminate; sessions survive transport loss (`tmux`, `termserver`, `termclient` tests). |
+| Runtime | The agent re-dials a control socket that goes silent (`TestReconnectsWhenServerGoesSilent`). |
+| With control plane (`services/control/internal/e2e`) | Pairing, lease delivery, direct WebRTC and WSS-relay connections, `ended_at` on disconnect, reattach to the same shell, revoke drops the phone within 30 s and leaves tmux running. |
+| systemd | `make spike-s4`: tmux survives `systemctl --user restart prw-agent`. |
+| Fuzz, packaging **(planned)** | Frame decoder, control JSON decoder, ticket parser; package install, upgrade and uninstall. |

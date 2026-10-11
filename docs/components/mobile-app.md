@@ -1,7 +1,7 @@
 # Mobile App
 
-> **Status:** Target design. This document describes intended behaviour and is updated as the app is implemented.
-> **Location:** `apps/mobile/` · **Platforms:** Android and iOS (foreground use) · **Toolchain:** Flutter 3.41 / Dart 3.11
+> **Status:** Implemented for Android and in daily use against a real host. The iOS bridge and the larger design below marked **(planned)** are not built yet.
+> **Location:** `apps/mobile/` · **Platforms:** Android (iOS planned), foreground use · **Toolchain:** Flutter 3.41 / Dart 3.11
 
 The phone app is how users interact with PRW. It handles:
 
@@ -9,7 +9,7 @@ The phone app is how users interact with PRW. It handles:
 - pairing computers
 - deciding which phones may reach which computers
 - opening, switching and resuming terminal sessions
-- reconnecting after network changes
+- reconnecting after the connection drops
 
 The app holds no server secrets. Its only long-lived credentials are a refresh token in secure storage and a hardware-backed device key.
 
@@ -19,101 +19,95 @@ The app holds no server secrets. Its only long-lived credentials are a refresh t
 
 ```mermaid
 flowchart TB
-  subgraph UI[Presentation]
-    D[Devices] --- S[Sessions] --- A[Activity] --- ST[Settings]
-    T[Terminal workspace]
+  subgraph UI[Screens]
+    SI[Sign-in] --- D[Devices] --- DD[Computer detail] --- P[Add computer] --- ST[Settings]
+    T[Terminal]
   end
-  subgraph State[Riverpod notifiers]
-    Auth[AuthController] ; Dev[DevicesNotifier] ; Conn[ConnectionController FSM] ; Term[TerminalSessionController]
+  subgraph State[Riverpod]
+    Auth[authProvider - AuthController] ; Dev[devicesProvider] ; Term[TermController]
   end
   subgraph Data[Services]
-    API[ApiClient - dio] ; Store[SecureStore] ; Key[DeviceKeyService] ; Sig[SignalingClient] ; TF[TransportFactory]
+    API[ApiClient - package:http] ; Store[SessionStore - secure storage] ; Native[NativeCore]
   end
-  subgraph Native
-    Core[prwcore binding] ; KS[Keystore / Secure Enclave]
+  subgraph Android
+    MA[MainActivity.kt - prw/core channels] ; Core[prwcore AAR - gomobile] ; KS[DeviceKey.kt - Android Keystore]
   end
   UI --> State --> Data
-  TF --> Core
-  Key --> KS
+  Native --> MA --> Core
+  MA --> KS
 ```
 
-### Folder structure (feature-first)
+All protocol work runs in the shared Go core (see [prwcore](prwcore.md)), bound with gomobile: the path race between WebRTC and the WSS relay, inner TLS, attestation, framing and flow control. Dart only sees a verified session.
+
+### Folder structure
 
 ```text
 apps/mobile/
-  pubspec.yaml  analysis_options.yaml  l10n.yaml
+  pubspec.yaml  analysis_options.yaml
   lib/
-    main.dart  app.dart  bootstrap.dart
-    core/
-      config/      env.dart (API base URL via --dart-define; no secrets)
-      api/         api_client.dart, interceptors (auth, request-id, retry), error_mapper.dart
-      auth/        auth_controller.dart, google_sign_in_service.dart, token_store.dart
-      crypto/      device_key_service.dart, fingerprint.dart
-      transport/   transport.dart, prwcore_transport.dart, fake_transport.dart
-      connection/  connection_controller.dart, connection_state.dart, network_monitor.dart
-      lifecycle/   app_lifecycle_observer.dart
-      routing/     router.dart, guards.dart
-      theme/       tokens.dart, theme.dart, terminal_theme.dart
-      l10n/        app_en.arb
-      widgets/     status_badge, inline_error, empty_state, destructive_confirm_sheet,
-                   loading_skeleton, connection_timeline, diagnostic_report
+    main.dart
+    app/        app.dart, config.dart (--dart-define), router.dart, theme.dart
+    core/       api.dart (ApiClient, models), auth.dart (AuthController, Google ID tokens),
+                native.dart (NativeCore → MethodChannel), session_store.dart (secure storage)
     features/
-      onboarding/  welcome_screen, trust_intro_screen
-      devices/     devices_screen, device_card, host_detail_screen, access_tab, add_computer/
-      phones/      phones_screen
-      connection/  preflight, connection_progress_screen
-      terminal/    terminal_screen, accessory_bar, paste_guard, osc_filter,
-                   session_picker_sheet, create_session_sheet
-      sessions/    sessions_screen
-      activity/    activity_screen
-      settings/    settings_screen, security, appearance, diagnostics
-  android/ ios/    device-key platform channel
-  test/ integration_test/
+      signin/     signin_screen.dart
+      devices/    devices_screen.dart, device_detail_screen.dart, devices_providers.dart
+      pairing/    pair_screen.dart, pairing_logic.dart
+      terminal/   terminal_screen.dart, terminal_controller.dart, accessory_bar.dart
+      settings/   settings_screen.dart
+    widgets/    error_view.dart, status_badge.dart
+  android/app/src/main/kotlin/dev/prw/app/
+    MainActivity.kt   # MethodChannel prw/core, EventChannel prw/core/events
+    DeviceKey.kt      # Android Keystore P-256 identity key
+  gocore/build-aar.sh # builds android/app/libs/prwcore.aar (gitignored)
+  third_party/xterm/  # vendored xterm.dart fork
+  test/
 ```
 
 ### Packages
 
 | Concern | Package | Notes |
 |---|---|---|
-| State | `flutter_riverpod` + `riverpod_annotation` | Easy to override with fakes in tests |
-| Routing | `go_router` | Declarative guards, `StatefulShellRoute` for the bottom navigation |
-| HTTP | `dio` | Queued refresh interceptor, request IDs, retry/backoff, cancel tokens |
-| Models | `freezed` + `json_serializable` | Sealed unions make the state machines exhaustive |
-| Google sign-in | `flutter_appauth` | Authorization Code + PKCE via the system browser (ASWebAuthenticationSession / Custom Tabs); never an embedded WebView |
-| Secure storage | `flutter_secure_storage` | Keychain `first_unlock_this_device` (no iCloud sync); Android Keystore-wrapped AES-GCM |
-| Terminal | `xterm` 4.0.0, **pinned**, with a maintained fork in `third_party/xterm` | The upstream package is inactive, so this project owns fixes |
+| State | `flutter_riverpod` 2.6 | Providers are overridden with fakes in tests |
+| Routing | `go_router` 17 | One redirect guard (§2) |
+| HTTP | `http` | Small `ApiClient`: bearer token, one refresh-and-retry on 401, error envelopes, idempotency keys |
+| Google sign-in | `google_sign_in` 7.2 | `GoogleSignIn.instance.initialize(serverClientId, nonce)` then `authenticate()`; the ID token is issued to the control plane's Web client ID |
+| Secure storage | `flutter_secure_storage` | Refresh token, device ID and pinned host fingerprints |
+| Terminal | `xterm` 4.0.0, overridden by the fork in `third_party/xterm` | Upstream is inactive; the fork fixes buffer and input bugs found in spike S5 (see its `CHANGELOG.md`) |
 | QR scanning | `mobile_scanner` | |
-| Network changes | `connectivity_plus` | |
-| Testing | `mocktail`, `alchemist` (goldens), `integration_test` | |
 
 Analytics and crash-reporting SDKs are deliberately excluded.
+
+### Build configuration
+
+Values are passed at build time; none are secrets.
+
+```sh
+apps/mobile/gocore/build-aar.sh          # Go core → android/app/libs/prwcore.aar
+cd apps/mobile
+flutter build apk --release \
+  --dart-define=PRW_API=https://api.example.invalid \
+  --dart-define=PRW_GOOGLE_SERVER_CLIENT_ID=<web-client-id>.apps.googleusercontent.com
+```
+
+The AAR build uses `GOWORK=off`, Android API 26, `-javapkg dev.prw.core` (so the facade is `dev.prw.core.mobile`) and `-ldflags=-checklinkname=0`, which Pion's Android interface enumeration needs.
 
 ---
 
 ## 2. Routing and guards
 
-| Route | Screen | Guard |
-|---|---|---|
-| `/auth/welcome` | Welcome / sign-in | Unauthenticated only |
-| `/auth/callback` | OAuth redirect (`com.example.prw:/oauth2redirect`, placeholder) | — |
-| `/onboarding/trust` | Trust introduction | Authenticated, not yet acknowledged |
-| `/app/devices` | Devices dashboard | Authenticated |
-| `/app/devices/add` | Add-computer wizard | Authenticated |
-| `/app/devices/:deviceId` (`/access`, `/sessions`) | Host detail | Resolved through the API; shows `not_found` if unresolved |
-| `/app/connection/:attemptId` | Connection progress | In-app navigation only |
-| `/app/terminal/:terminalSessionId` | Terminal | Re-validates account, grant and session before connecting |
-| `/app/sessions`, `/app/activity` | Tabs | Authenticated |
-| `/app/settings[/devices,/security,/appearance,/diagnostics]` | Settings | Authenticated |
+| Route | Screen |
+|---|---|
+| `/signin` | Google sign-in |
+| `/devices` | Computers list (start page) |
+| `/devices/:id` | Computer detail: presence, fingerprint, agent version, access for this phone, remove |
+| `/pair` | Add computer: scan the QR code or type the code, confirm the fingerprint |
+| `/terminal/:id` | Terminal for computer `:id` |
+| `/settings` | Account, server, phones, sign out |
 
-The global redirect checks, in this order:
+The redirect waits while the session is being restored, sends a signed-out user to `/signin`, and sends a signed-in user away from `/signin` to `/devices`.
 
-1. Bootstrapping.
-2. Unauthenticated → `/auth/welcome`.
-3. `device_revoked` → wipe local state, then `/auth/welcome` with an explanation.
-4. Trust not yet acknowledged → `/onboarding/trust`.
-5. Otherwise, the requested route.
-
-**Deep links never grant access.** They are identifiers only.
+**Deep links never grant access.** Route parameters are identifiers only; every action is authorized by the server and, for terminals, by the host.
 
 ---
 
@@ -125,239 +119,140 @@ sequenceDiagram
   participant G as Google
   participant API
   App->>API: POST /v1/auth/challenge → nonce
-  App->>G: AppAuth authorize (PKCE, OIDC nonce)
+  App->>G: google_sign_in authenticate (serverClientId, nonce)
   G-->>App: id_token
-  App->>App: DeviceKeyService.ensureKey(), then sign JCS payload (purpose prw.auth.v1, nonce, spki_fp, iat)
+  App->>App: Keystore key → SPKI + fingerprint; sign PoP (purpose prw.auth.v1, nonce, spki_fp) in the Go core
   App->>API: POST /v1/auth/exchange
-  API-->>App: access (memory), refresh (secure storage), device_id
+  API-->>App: access token, refresh token, device_id
 ```
 
-Google is the only identity provider. The server accepts only allowlisted Google subjects; anyone else sees the **account not allowed** state on the welcome screen.
+Google is the only identity provider. The server accepts only allowlisted Google subjects; anyone else sees a plain "this Google account is not allowed" message.
 
 **A newly signed-in phone needs no further approval, but has no access to any computer** until the owner grants it.
 
 | Item | Behaviour |
 |---|---|
-| Access token | In memory only |
-| Refresh token | Secure storage key `prw.refresh.v1`. On rotation, the new token is saved before the old one is dropped. |
-| Refresh | A dio `QueuedInterceptor` refreshes once when it sees a 401. The refresh signs a server nonce with the device key, then replays the queued requests. `refresh_reuse_detected` or `device_revoked` triggers a hard sign-out with local wipe. |
-| Logout | `POST /v1/auth/logout` revokes this phone's session only. The device key is kept so the next sign-in re-associates the same device. |
+| Access token | Held by `AuthController`; restored with the session |
+| Refresh token | Secure storage. On rotation, the new token is saved before it is used. |
+| Refresh | `ApiClient` refreshes once on `401 unauthenticated` and retries the request once. Concurrent refreshes share one call. The refresh signs a server nonce with the device key (`prw.refresh.v1`). A 401/403 from refresh signs the phone out locally. |
+| Logout | `POST /v1/auth/logout` revokes this phone's session only. The device key is kept, so the next sign-in re-associates the same device. |
 
 ---
 
 ## 4. Device key
 
-```dart
-abstract interface class DeviceKeyService {
-  Future<DeviceKeyInfo> ensureKey();          // spki, fingerprint, hardwareBacked
-  Future<Uint8List> sign(Uint8List message);  // ECDSA P-256 / SHA-256 (DER)
-  Future<void> deleteKey();                   // only on explicit "reset this phone"
-}
-```
-
 | Platform | Implementation |
 |---|---|
-| Android | `KeyPairGenerator("EC", "AndroidKeyStore")` with `secp256r1` and `PURPOSE_SIGN`. StrongBox when available, otherwise TEE. |
-| iOS | `SecKeyCreateRandomKey` with `kSecAttrTokenIDSecureEnclave` and `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`. Simulators get a software key, flagged as such. |
+| Android | `DeviceKey.kt`: ECDSA P-256 in the `AndroidKeyStore` with `PURPOSE_SIGN`. StrongBox when available (API 28+), otherwise TEE. It implements the Go `Signer` interface, so the Go core asks Kotlin to sign SHA-256 digests and never sees the private key. |
+| iOS **(planned)** | Secure Enclave key (`kSecAttrTokenIDSecureEnclave`, `…AfterFirstUnlockThisDeviceOnly`) behind the same channel. |
 
-- Hardware keys cannot be exported, so signing always happens on the platform side. The transport core requests signatures through a callback.
-- The fingerprint is `base32(sha256(SPKI))`, grouped as `XXXX-XXXX-…`.
-- Diagnostics shows whether the key is hardware-backed.
+The fingerprint is the hex SHA-256 of the SPKI, shown grouped in blocks of four.
 
 ---
 
-## 5. Transport abstraction
+## 5. Native bridge
 
-```dart
-abstract interface class Transport {
-  Stream<TransportEvent> get events; // pathSelected(direct|turnUdp|turnTcp|turnTls|wssRelay),
-                                     // connected, peerVerified, closed(reason), stats(rtt)
-  Future<void> connect(ConnectParams p);
-  Future<ControlReply> sendControl(ControlMsg m);
-  Stream<Uint8List> terminalOutput(int streamId);
-  Future<void> writeTerminal(int streamId, Uint8List bytes); // awaits credit
-  Future<void> close({required CloseReason reason});
-}
-```
+`NativeCore` (Dart) talks to `MainActivity.kt` over `MethodChannel('prw/core')`; output and lifecycle events arrive on `EventChannel('prw/core/events')`.
 
-| Implementation | Use |
+| Method | Go facade call (`dev.prw.core.mobile`) |
 |---|---|
-| `PrwcoreTransport` | Wraps the shared Go core binding. Calls go through a `MethodChannel` and byte streams through an `EventChannel`. The path race, inner TLS, attestation and flow control all happen inside the core. Dart sees `peerVerified` only after **both** sides have verified each other. |
-| `FakeTransport` | In-memory loopback with a scriptable host simulator (sessions, latency, drops). Used by widget and integration tests. |
+| `publicKey`, `fingerprint`, `signPoP` | Keystore SPKI, `Mobile.fingerprint`, `Mobile.signPoP` |
+| `connect` | `Mobile.connect(api, accessToken, deviceId, hostId, pinnedFp, mode="auto", 30 s, key, events)`; returns the path (`direct`, `turn` or `wss_relay`) |
+| `open`, `attach`, `list`, `terminate` | Session methods; results are JSON |
+| `input`, `resize`, `detach`, `close` | Session methods |
 
-The proposed default backend is the shared Go core, which is used on the phone through gomobile. The final choice is made after the transport spike. If that spike rules the core out, `flutter_webrtc` plus Dart framing will implement the same interface.
+Events are `output` (bytes for a stream), `exit` (session ID), `revoked` (reason) and `closed` (error text, empty on a clean close). Blocking calls run off the UI thread. Error codes from the core (`host_key_mismatch`, `access_grant_missing`, `device_revoked`, …) arrive as `PlatformException.code`.
 
 ---
 
-## 6. Connection state machine
+## 6. Computers list
 
-The app keeps one controller per connected host. Up to 4 hosts can be connected at the same time.
+- `devicesProvider` loads every device of the account (paged, hosts first, sorted by name).
+- While the list is on screen it refetches every **30 s** (`devicesPollInterval`), so presence and "seen X ago" stay current. The provider is auto-disposed, so polling stops when nothing watches it, and a failed load retries on the next tick.
+- **Pull to refresh** works in every state (loading, error, empty and loaded). Each state is a scrollable list, so the gesture always starts even when the content is short.
+- Each host shows a `StatusBadge` (online, stale, offline or revoked, as icon plus word) and a Connect button that is enabled only when the host is online and this phone has a grant.
+
+---
+
+## 7. Connection and reconnect
+
+`TermController` owns one connection to one host.
 
 ```mermaid
 stateDiagram-v2
-  [*] --> idle
-  idle --> preflight: connect()
-  preflight --> denied: no grant / host revoked / offline / old agent
-  preflight --> requesting: ok
-  requesting --> negotiating: attempt created
-  requesting --> failed: API error
-  negotiating --> checkingPath: SDP exchanged / relay joined
-  checkingPath --> verifyingPeer: transport up
-  verifyingPeer --> ready: peer.identity_verified
-  verifyingPeer --> failed: peer_identity_mismatch
-  checkingPath --> failed: 20 s timeout
-  ready --> reconnecting: transport lost / network change / resume
-  reconnecting --> requesting: backoff, new attempt
-  reconnecting --> failed: host offline / revoked / gave up
-  ready --> closing: user disconnect (detach)
-  closing --> idle
-  failed --> requesting: retry
-  denied --> idle
+  [*] --> connecting
+  connecting --> choosing: connected, list sessions
+  connecting --> failed: error
+  connecting --> revoked: device_revoked / access_grant_missing / host_key_mismatch
+  choosing --> attached: open new / attach existing
+  attached --> reconnecting: transport closed
+  reconnecting --> attached: reconnect + re-attach same session
+  reconnecting --> revoked: access removed
+  attached --> choosing: session exited
+  failed --> connecting: retry
 ```
 
-- **Input freeze.** Terminal input is disabled in every state except `ready`. Keystrokes are never sent over a stale connection.
-- **Reconnect policy.**
-  - Backoff steps: 0.5, 1, 2, 4, 8 and 15 s, then 30 s, with full jitter. The first retry happens immediately on resume or a network change.
-  - The controller gives up after 3 minutes and offers Retry.
-  - Every retry creates a **new attempt**, so tickets and TURN credentials are never reused.
-- **Network changes.** The controller probes the connection with a control ping (2 s timeout). It then tries make-before-break: it builds a new attempt while the old transport is still alive and switches over once the new one is ready.
-- **Status reports.** The controller reports to the server with `PATCH /v1/connections/{id}`, sending `{status, path_type}` or `{failure_code}`.
+- Before connecting, the access token is refreshed so a long-lived connection starts with a fresh token.
+- The host's fingerprint is pinned at pairing (secure storage). `connect` refuses a host whose key does not match it (`host_key_mismatch`), before any terminal traffic.
+- **Reconnect** waits 0.5, 1, 2, 4, 8, then 15 s between tries and re-attaches the same terminal session, so the shell's state is preserved. Every retry creates a new attempt, so tickets and TURN credentials are never reused.
+- Revocation (`revoked` event or a revoked error) stops retrying and shows why.
+- **Disconnect** means detach: the shell keeps running on the computer.
 
----
-
-## 7. App lifecycle
-
-| Event | Behaviour |
-|---|---|
-| `paused` / `hidden` | Stop sending input and keep the connection opportunistically. The OS may suspend networking; background connectivity is not promised. |
-| `resumed` | If the app was away more than 5 s, or the transport has closed: check token expiry, re-validate the grant, reconnect and reattach the session that was in the foreground. Show "Reconnecting…". |
-| Process killed | On next launch, the Sessions tab lists sessions from server metadata; tap one to reattach. |
-| Memory pressure | Trim background sessions' scrollback to 2,000 lines. |
+Make-before-break on network changes, reconnect on app resume and several hosts at once are **(planned)**.
 
 ---
 
 ## 8. Terminal
 
-| Concern | Design |
+| Concern | Implementation |
 |---|---|
-| Renderer | One `xterm` `Terminal` per attached session, rendered in a `TerminalView` with a bundled monospace font (JetBrains Mono, OFL), chosen because it clearly distinguishes `I l 1 O 0`. |
-| Output path | Transport bytes → streaming UTF-8 decoder (handles code points split across frames) → `OscFilter` → `terminal.write`, batched once per frame (16 ms). |
-| Escape filtering | A byte-level state machine, not a regex. <br>• OSC 52 clipboard writes are dropped unless enabled in Settings, and then they show a toast. <br>• OSC 0/1/2 titles are capped at 120 characters and stripped of control characters. <br>• OSC 8 links only open after a tap and a confirmation. <br>• OSC 1337 file transfers and DCS sixel images are dropped. <br>• Everything else passes through unchanged. |
-| Input | Soft-keyboard and IME text goes through the xterm text-input client. Hardware `KeyEvent`s are mapped to VT sequences. |
-| Accessory bar | Esc, Tab, Ctrl (tap for one key, double-tap to lock), Alt, arrows, PgUp/PgDn, Home/End, `\| ~ / -`. A second row with F1–F12 is behind a toggle. |
-| Paste guard | Triggers when a paste is more than 1 line or larger than 1 KiB, or when it contains `ESC` or `CR` outside bracketed-paste mode. Shows the line count and a preview, then asks for confirmation. Pastes are wrapped in bracketed-paste markers when the remote has enabled that mode. |
-| Resize | Columns and rows are computed from font metrics, debounced by 120 ms, then sent as `terminal.resize` (clamped to 1–1000). Rotation, foldables and keyboard show/hide all resize the terminal without recreating the session. |
-| Scrollback | 10,000 lines for the foreground session. On reattach, tmux repaints the screen. Older local scrollback is kept behind a divider: "— reconnected HH:MM, output while disconnected not shown —". Lossless replay is never claimed. |
-| Selection | Long-press to select, then Copy. A tap does not move the remote cursor. |
-| Reconnect overlay | The terminal is dimmed to 60% with a "Reconnecting… (attempt n)" banner. Input is disabled; Disconnect stays available. |
-| Multiple sessions | One peer connection per host carries several terminal streams, so switching sessions does not reconnect. |
-| Flow control | The app grants 256 KiB of output credit and re-grants as it renders. Large pastes are chunked against the 64 KiB input credit. |
-| Coding agents | `TERM=xterm-256color`, truecolor and the alternate screen are supported. Mouse mode is off by default, with a toggle. Validated against Claude Code and Codex. |
+| Renderer | One xterm.dart `Terminal` in a `TerminalView`, from the vendored fork |
+| Output | Bytes are decoded as UTF-8 (malformed sequences replaced) and written to the terminal |
+| Input | Soft keyboard and IME text, plus hardware keys mapped to VT sequences; arrows honour application cursor mode (DECCKM) |
+| Accessory bar | Esc, Tab, sticky Ctrl, arrows, PgUp/PgDn, ^C, ^D, `\|`, `~` and more |
+| Paste guard | A paste with a newline or longer than 200 characters asks for confirmation. Pastes are wrapped in bracketed-paste markers when the remote enabled that mode. |
+| Resize | Columns and rows follow the view and are sent as `resize` |
+| Persistence | tmux repaints the screen on attach, so a reattached session shows the current screen |
 
-**Disconnect** always means detach: the shell keeps running. **Terminate session** is a separate action with its own confirmation.
+OSC filtering (clipboard, titles, links), configurable fonts and scrollback, and the reconnect overlay are **(planned)**.
 
 ---
 
-## 9. Screens and states
+## 9. Screens
 
-| Screen | States |
+| Screen | What it does today |
 |---|---|
-| Welcome / sign-in | initial, loading, canceled, provider error, network unavailable, **account not allowed** |
-| Trust introduction | unacknowledged, acknowledged. Shown once, before the first connection. |
-| Devices dashboard | loading skeleton, empty ("Add your first computer"), list, filter empty, service unavailable, stale data. <br>Has search, filter chips, sort, and a virtualized list. |
-| Add computer | Steps: OS → install and verify → scan or enter code → confirm fingerprint → done. <br>Errors: code expired, already used, wrong account, host offline, **fingerprint mismatch** (hard stop), agent too old, rate limited, locked, camera permission denied (falls back to manual entry). <br>The "Grant this phone terminal access" checkbox defaults to off. |
-| Host detail | Overview, Access, Sessions and Diagnostics tabs. States: loading, loaded, not found, revoked (read-only), offline. |
-| Access tab | Phone list with a terminal toggle and an optional expiry. Toggles update optimistically and roll back on error. |
-| Phones | This phone, other phones, lost-phone revoke with a two-step confirmation, and a warning before revoking the last active phone. |
-| Connection preflight | access missing (links to the Access tab), host revoked, host offline (last seen), unsupported agent, session expired (re-auth) |
-| Connection progress | Requesting → Negotiating → Checking path → **Verifying computer** → Opening terminal. Has Cancel and a 20 s timeout, and shows a path chip once a path is known. |
-| Terminal | live, reconnecting (stale), reattached vs new session (toast), ended (exit code), revoked (modal), peer identity failed (hard error) |
-| Session picker | Active, Detached, Ended. A "Non-persistent" tag marks sessions without tmux. Host unavailable shows cached, greyed-out metadata. |
-| Create session | Optional title and the default shell profile, plus a privilege warning showing the host OS user. Errors: host capacity, PTY unavailable, shell missing, permission denied, connection lost. |
-| Activity | Paginated audit feed with filters. States: loading, empty, list, end of list. |
-| Settings | Account, phones, security (this phone's fingerprint), terminal (font, line height, OSC 52, mouse), theme, diagnostics (connection test, recent attempts, redacted export), about, sign out. |
+| Sign-in | One Google button, a note that the phone gets its own hardware key and no access by default, and an inline error (including **account not allowed**) |
+| Computers | List with status, last seen and Connect; empty state explains `prw-agent pair`; error view with retry; pull to refresh; 30 s polling |
+| Add computer | QR scan (or typed code) → shows the computer name and fingerprint → "Give this phone terminal access" (on by default) → approve. A QR fingerprint that does not match the server's is a hard stop. |
+| Computer detail | Presence, last seen, key fingerprint, agent version, grant or revoke this phone's access, remove the computer |
+| Terminal | Connecting, session picker (open new or attach), attached, reconnecting, failed (retry), revoked |
+| Settings | Account, server URL, phones (remove a lost phone, with confirmation), sign out of this phone |
 
-Errors are rendered by a central `ErrorPresenter`. It maps API and transport error codes to a title, a body, a primary action and a support code.
-
-### Six independent states
-
-The UI never collapses these into a single "connected" flag:
-
-| # | State | Source | Shown as |
-|---|---|---|---|
-| 1 | Device presence: online, stale, offline | Heartbeat-derived `presence` | `StatusBadge` (icon + text) |
-| 2 | Permission: granted, none, expired, revoked | This phone's grant | "Terminal access" / "No access" chip |
-| 3 | Connection establishment | Connection state machine | `ConnectionTimeline` |
-| 4 | Transport path | `pathSelected` event | "Direct", "Relayed" or "Relayed (web)" chip |
-| 5 | Authorized terminal | `peer.identity_verified` + `terminal.ready` | Input enabled, secure indicator |
-| 6 | Process persistence | Session metadata (`persistent`, `status`) | "Detached – still running", "Non-persistent" |
-
-Examples of how the states combine:
-
-- Online, no permission → show "View details", never Connect.
-- Permitted but offline → Connect is disabled and the last-seen time is shown.
-- Transport up but verification failed → hard error; no terminal is shown.
-- Transport lost but the process is still running → "Your session is still running on the computer."
+The UI keeps separate signals for presence, permission, connection state, path and session persistence; it never collapses them into one "connected" flag.
 
 ---
 
-## 10. Design system, theming and accessibility
+## 10. Testing
 
-**Components:**
+| File | Coverage |
+|---|---|
+| `test/core_test.dart` | `ApiClient` refresh-once-and-retry, error envelopes; QR payload parsing; fingerprint mismatch is a hard failure; paste rule; Ctrl mapping; error copy |
+| `test/auth_terminal_test.dart` | Sign-in binds the Google token, nonce and hardware key; disallowed account message; terminal connect → open → type → drop → re-attach the same session; a revoked grant stops retrying |
+| `test/widgets_test.dart` | Signed-out routing; status words and when Connect is enabled; empty state; pull to refresh in short, empty and failed lists; the list refreshing itself while open |
+| `test/xterm_fork_test.dart` | Fork fixes: scroll-region line feeds keep lines attached; DECCKM arrows |
+| `test/xterm_tui_test.dart` | Key encoding and bracketed paste; replays real Claude Code / Codex captures recorded with `tests/spikes/s5_capture_tui.sh` (skipped when no fixtures are present) |
 
-- `StatusBadge`
-- `DeviceCard`
-- `PermissionRow`
-- `ConnectionTimeline`
-- `EmptyState`
-- `InlineError`
-- `TerminalToolbar`
-- `TerminalAccessoryBar`
-- `DestructiveConfirmSheet`
-- `DiagnosticReport`
-- `LoadingSkeleton`
-
-**Design tokens** (`core/theme/tokens.dart`):
-
-- Spacing: a 4/8 pt scale.
-- Radii and a type scale.
-- Semantic colours: `surface`, `onSurface`, `accent`, `statusOnline`, `statusOffline`, `statusStale`, `statusRevoked`, `statusRelay`, `danger`.
-- A 16-colour ANSI palette for each theme.
-- Motion durations of 120, 180 and 220 ms.
-
-**Theme.** Light, dark and system. System is the default, with a manual override.
-
-**Accessibility:**
-
-- Semantic labels on every status, for example "workstation, online, last seen 2 minutes ago".
-- Colour is never the only signal.
-- Tap targets are at least 48 dp.
-- Text scaling applies to the app chrome. The terminal has its own font-size setting.
-- Reduced-motion settings are respected.
-- Focus is managed correctly in sheets.
-
-**Localization.** All copy lives in ARB files using ICU plurals and placeholders. Sentences are never concatenated.
+`make mobile` runs `flutter analyze` and `flutter test`; CI runs the same. End-to-end behaviour of the Go side of the app is covered by `TestMobileFacade` in `services/control/internal/e2e`.
 
 ---
 
-## 11. Testing
+## 11. Planned
 
-| Layer | Coverage | Where |
-|---|---|---|
-| Unit | Every connection state-machine edge, error mapping, `OscFilter` (vectors and fuzz), the UTF-8 split decoder, paste-guard rules, fingerprint formatting, token rotation ordering, backoff | CI |
-| Contract | Dart frame codec against the shared golden vectors in `protocol/vectors/` | CI |
-| Widget | Every screen state, rendered via provider overrides; destructive confirmations; the six-state combinations | CI |
-| Golden | Light/dark, small/large phone, text scale 1.0/2.0 for key screens | CI |
-| Integration | Full app with `FakeTransport` and a mocked API: pair → grant → connect → run → drop → reattach → revoke | CI (emulator, nightly) |
-| End-to-end | Real Android and iOS devices against staging and a real agent | Device lab |
-| Network | Wi-Fi → cellular handoff, a TCP/443-only proxy network, airplane-mode toggles | Device lab |
-| Performance | Frame time under output flood (< 16 ms on a mid-range Android device), cold start, memory with 4 sessions | Device lab |
-| Security | No secrets in the APK/IPA (CI strings scan), a redacting logger, terminal deep link without a grant is denied | CI + lab |
-| Accessibility | `meetsGuideline` checks per screen, plus a manual VoiceOver/TalkBack pass | CI + manual |
+The target design keeps these for later phases:
 
-The CI pipeline runs:
-
-1. `dart format --set-exit-if-changed`
-2. `flutter analyze` with strict lints
-3. unit, widget and golden tests
-4. a debug APK build and an iOS no-codesign build on macOS
+- **iOS**: Secure Enclave key and the `prw/core` channel in Swift, using the same Go facade built for iOS.
+- **Connection**: app-lifecycle reconnect on resume, make-before-break on Wi-Fi ↔ cellular changes, several hosts connected at once, status reports from the phone (`PATCH /v1/connections/{id}`).
+- **Terminal**: byte-level OSC filter (OSC 52 opt-in, title limits, OSC 8 confirmation), bundled monospace font, scrollback divider on reconnect, mouse-mode toggle, F-key row.
+- **Screens**: sessions and activity tabs, trust introduction, diagnostics with a redacted export, theme and terminal settings, per-phone access management with expiry.
+- **Quality**: golden tests, accessibility guideline checks, ARB localization, device-lab network tests.

@@ -1,6 +1,6 @@
 # prwcore: Shared Go Core
 
-> **Status:** Target design. The host agent always uses prwcore. Using it on the phone through gomobile is **proposed**; the decision is made after the transport spike on real Android and iOS devices.
+> **Status:** Implemented. Both the host agent and the Android app use prwcore; the app links it through gomobile (decided after the on-device transport spike, see [spike results](../development/spike-results.md)). Items marked **(planned)** are not built yet.
 > **Location:** `core/prwcore/`
 
 prwcore is the single implementation of the PRW data-plane protocol. It covers:
@@ -10,7 +10,7 @@ prwcore is the single implementation of the PRW data-plane protocol. It covers:
 - transport establishment over WebRTC (Pion) or the WSS relay with inner TLS 1.3
 - the connection manager that races those paths
 
-The host agent links it directly. The phone app is intended to link it through gomobile, so both ends run the same code. This removes interop risk between two WebRTC stacks and keeps the protocol in one place.
+The host agent links it directly. The phone app links it through gomobile, so both ends run the same code. This removes interop risk between two WebRTC stacks and keeps the protocol in one place.
 
 prwcore contains no custom cryptography. It composes Pion (DTLS/SCTP), Go `crypto/tls`, `crypto/ecdsa` and `go-jose`.
 
@@ -20,19 +20,26 @@ prwcore contains no custom cryptography. It composes Pion (DTLS/SCTP), Go `crypt
 
 ```text
 core/prwcore/
-  frame/         12-byte header codec, size validation
-  control/       control message envelope + typed messages, JSON schema validation
-  flow/          per-stream credit accounting
-  attest/        JCS canonicalisation, ES256 JWS build/verify, DER↔raw signature conversion
-  ticketclaims/  ticket and lease claim types + verification helpers (EdDSA)
+  frame/        12-byte header codec, size validation
+  control/      control message envelope carried in CONTROL frames
+  flow/         per-stream credit accounting (output 256 KiB, input 64 KiB windows)
+  attest/       JCS canonicalisation, ES256 JWS build/verify, DER↔raw signatures,
+                peer attestation and proof-of-possession (prw.auth.v1, prw.refresh.v1,
+                prw.agent.v1, prw.pair.create.v1, prw.pair.complete.v1)
+  token/        EdDSA server tokens: tickets, leases, relay and access tokens; key sets
+  peer/         hello + mutual attestation handshake, path.select, identity_verified gate
   transport/
-    transport.go       Transport interface (Conn with control + N terminal streams)
-    webrtc/            Pion PeerConnection, negotiated DataChannels, ICE config
-    wssrelay/          /v1/relay join, binary WS ↔ net.Conn adapter, inner TLS 1.3
-  connmgr/       path race, timeouts, UDP-blocked hint cache, winner selection
-  mobile/        gomobile-friendly facade (proposed): callbacks, byte slices, no generics
-  vectors_test/  golden-vector tests against protocol/vectors/
+    transport.go, streamconn.go, pipe.go   Conn interface (control + N terminal streams)
+    webrtc/        Pion PeerConnection, negotiated DataChannels, ICE config
+    wssrelay/      /v1/relay join, binary WS ↔ net.Conn adapter
+    innertls/      ephemeral P-256 certificates, TLS 1.3 with fingerprint pinning
+  connmgr/      path race, timeouts, winner selection
+  client/       phone side of a connection: request attempt, signaling, race, verify host pin
+  termclient/   terminal protocol client (open, attach, list, input, resize, detach, terminate)
+  mobile/       gomobile facade used by the Android app (§7)
 ```
+
+Golden vectors live in `protocol/vectors/` at the repository root.
 
 ---
 
@@ -151,58 +158,65 @@ A maximum frame is 16,396 bytes, which stays well within the message-size limits
 ## 6. Connection manager
 
 ```text
-t=0    request attempt (done by caller) → start ICE (offer, trickle)
-       if hint[network] == UDP_BLOCKED → start WSS relay immediately
-t=4s   if ICE not connected → start WSS relay
+t=0    request attempt (done by the caller) → start ICE (offer, trickle)
+       if UDPBlocked → start the WSS relay immediately as well
+t=4s   if no path has won yet → start the WSS relay
 each transport, when up → hello + attestation
-first transport to complete attestation wins; others are closed
-t=20s  no winner → fail "connect_timeout" (with ice_state, turn_alloc, wss_state diagnostics)
-winner == wss && no srflx/relay candidates gathered → hint[network] = UDP_BLOCKED (24 h)
-winner == direct|turn → clear hint
+the phone (controlling side) picks the first transport to finish and announces it with path.select;
+the host (controlled side) commits to whichever transport carries path.select; the others are closed
+t=20s  no winner → fail "connect_timeout"; the report lists each path's timing and error
 ```
 
-- `network` is a salted, install-local hash of the current network's identity. It never leaves the device.
+- The host always runs with `UDPBlocked` set, so it offers both paths at once and lets the phone choose.
 - The path reported to the server is one of `direct` (host or srflx pair), `turn` (relay candidate) or `wss_relay`.
 - A reconnect always uses a brand-new attempt, ticket, TURN credentials and relay token.
+- Caching a per-network "UDP blocked" hint on the phone is **(planned)**.
 
 ---
 
-## 7. gomobile binding surface (proposed)
+## 7. gomobile binding surface
 
-gomobile can only export simple types, so `prwcore/mobile` provides a small facade built from callbacks and byte slices:
+gomobile can only export simple types, so `prwcore/mobile` exposes strings, ints, byte slices and two interfaces. All protocol and crypto encoding stays in Go; the app never re-implements attestation, framing or flow control.
 
 ```go
-// package mobile
-type HostCallbacks interface {
-    OnEvent(kind string, json []byte)            // pathSelected, connected, peerVerified, closed, stats
-    OnTerminalOutput(streamID int32, data []byte)
-    OnSignal(json []byte)                         // outbound signaling to send via the app's WSS client
-    Sign(digest []byte) ([]byte, error)           // delegated to Keystore / Secure Enclave
+// package mobile (Java: dev.prw.core.mobile)
+type Signer interface {            // Android Keystore / Secure Enclave
+    PublicKeySPKI() ([]byte, error)
+    SignDER(digest []byte) ([]byte, error)
+}
+type Events interface {
+    OnOutput(stream int, data []byte)
+    OnEvent(kind, detail string)    // "exit" (session id), "revoked" (reason), "closed" (error, "" if clean)
 }
 
-type Session struct{ /* opaque */ }
+func Fingerprint(spki []byte) string
+func SignPoP(purpose, nonce, spkiFP, deviceID string, s Signer) (string, error) // prw.auth.v1 / prw.refresh.v1
+func Connect(api, accessToken, deviceID, hostID, pinnedFP, mode string, timeoutMS int, s Signer, ev Events) (*Session, error)
 
-func Connect(paramsJSON []byte, cb HostCallbacks) (*Session, error)
-func (s *Session) DeliverSignal(json []byte) error
-func (s *Session) SendControl(json []byte) ([]byte, error)
-func (s *Session) WriteTerminal(streamID int32, data []byte) error // blocks on credit
-func (s *Session) Close(reason string)
+func (s *Session) Path() string      // direct | turn | wss_relay
+func (s *Session) AttemptID() string
+func (s *Session) Open(cols, rows int) (string, error)            // JSON session description
+func (s *Session) Attach(id string, cols, rows int) (string, error)
+func (s *Session) List() (string, error)
+func (s *Session) Input(stream int, data []byte) error
+func (s *Session) Resize(stream, cols, rows int) error
+func (s *Session) Detach(stream int) error
+func (s *Session) Terminate(id string) error
+func (s *Session) Close()
 ```
 
-- A thin Kotlin and Swift shim adapts these callbacks to Flutter `MethodChannel` and `EventChannel`.
-- The transport spike checks the following before this approach is adopted:
-  - APK/IPA size growth (target ≤ 25 MB)
-  - cold start time
-  - foreground and resume behaviour
-  - reproducible CI builds
+- `mode` is `auto`, `webrtc` or `wss`. Blocking calls must run off the UI thread.
+- Errors are stable codes (`host_key_mismatch`, `access_grant_missing`, …) that the app maps to UI copy.
+- `MainActivity.kt` adapts this to Flutter's `MethodChannel('prw/core')` and `EventChannel('prw/core/events')`; see [mobile app](mobile-app.md#5-native-bridge).
+- `apps/mobile/gocore/build-aar.sh` builds the AAR (`gomobile bind -target=android/arm64,android/amd64 -androidapi 26 -javapkg dev.prw.core -ldflags=-checklinkname=0`). An iOS binding is **(planned)**.
 
 ---
 
 ## 8. Golden vectors
 
-`protocol/vectors/` holds JSON fixtures that both the Go and Dart tests consume. CI fails if any implementation disagrees with a fixture.
+`protocol/vectors/` holds JSON fixtures that implementations must agree with. Today it contains `frames.json`, checked by the Go frame codec tests; because the phone uses the same Go core, there is no separate Dart codec to check. The remaining fixture sets are **(planned)**:
 
-1. Frames: every `type`, boundary lengths (0, 1, 16384), `FIN`, and invalid cases (`len` 16385, bad `ver`, non-zero flags).
+1. Frames (implemented): every `type`, boundary lengths (0, 1, 16384), `FIN`, and invalid cases (`len` 16385, bad `ver`, non-zero flags).
 2. CONTROL envelopes for every message type, including unknown fields, which must be ignored.
 3. JCS canonicalisation of attestation, auth PoP, pairing and lease payloads.
 4. ES256: DER→raw conversion, and a deterministic (RFC 6979) attestation JWS.
