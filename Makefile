@@ -1,10 +1,10 @@
-# Private Remote Workspace: developer entry points.
+# ConnRelay: developer entry points.
 # Go modules are listed in go.work; the phone app's gomobile library is built
 # by apps/mobile/gocore/build-aar.sh.
 
 GO      ?= go
 FLUTTER ?= flutter
-MODULES := core/prwcore services/control agents/host tests
+MODULES := core/connrelaycore services/control agents/host tests
 # The toolchain is pinned by the toolchain line in go.mod (GOTOOLCHAIN=auto).
 
 .PHONY: all fmt vet test test-race test-short mobile netlab spike-s4 ci

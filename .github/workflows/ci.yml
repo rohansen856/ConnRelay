@@ -30,12 +30,12 @@ jobs:
         run: make vet
       - name: test (race)
         env:
-          PRW_REQUIRE_DB: "1"   # database tests must run, never skip
+          CONNRELAY_REQUIRE_DB: "1"   # database tests must run, never skip
         run: make test-race
       - name: govulncheck
         run: |
           go install golang.org/x/vuln/cmd/govulncheck@latest
-          for m in core/prwcore services/control agents/host tests; do (cd $m && govulncheck ./...); done
+          for m in core/connrelaycore services/control agents/host tests; do (cd $m && govulncheck ./...); done
 
   mobile:
     runs-on: ubuntu-24.04
