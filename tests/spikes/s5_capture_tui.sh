@@ -15,7 +15,7 @@ name=$1; shift
 root=$(cd "$(dirname "$0")/../.." && pwd)
 out="$root/apps/mobile/test/fixtures"
 mkdir -p "$out"
-work=$(mktemp -d /tmp/prw-s5.XXXXXX)
+work=$(mktemp -d /tmp/connrelay-s5.XXXXXX)
 sock="$work/t.sock"
 tm() { tmux -f /dev/null -S "$sock" "$@"; }
 trap 'tm kill-server 2>/dev/null || true; rm -rf "$work"' EXIT

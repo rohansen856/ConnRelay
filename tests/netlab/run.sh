@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# PRW network lab (spikes S2 and S3). Builds the lab binaries, starts the
+# ConnRelay network lab (spikes S2 and S3). Builds the lab binaries, starts the
 # topology in compose.yaml and runs one full connection attempt per scenario,
 # checking which path the connection manager selected.
 #
@@ -11,8 +11,8 @@ root=$(cd ../.. && pwd)
 
 
 mkdir -p .lab/bin
-(cd "$root" && CGO_ENABLED=0 go build -o tests/netlab/.lab/bin/prw-labserver ./services/control/cmd/prw-labserver \
-  && CGO_ENABLED=0 go build -o tests/netlab/.lab/bin/prw-labpeer ./tests/netlab/cmd/prw-labpeer)
+(cd "$root" && CGO_ENABLED=0 go build -o tests/netlab/.lab/bin/connrelay-labserver ./services/control/cmd/connrelay-labserver \
+  && CGO_ENABLED=0 go build -o tests/netlab/.lab/bin/connrelay-labpeer ./tests/netlab/cmd/connrelay-labpeer)
 ./gen-certs.sh .lab/certs >/dev/null
 
 dc() { docker compose "$@"; }
@@ -32,12 +32,12 @@ scenario() { # name, phone-nat, host-nat, expect, extra phone flags...
   local P=${PHONE:-phone} H=${HOST:-host}
   dc exec -T router-p /lab/config/router.sh "$pnat" >/dev/null
   dc exec -T router-h /lab/config/router.sh "$hnat" >/dev/null
-  dc exec -T "$H" pkill -f prw-labpeer 2>/dev/null || true
+  dc exec -T "$H" pkill -f connrelay-labpeer 2>/dev/null || true
   local id="s$RANDOM$RANDOM"
-  dc exec -T -d "$H" sh -c "/lab/bin/prw-labpeer -role host -lab-id $id -server https://api.lab.invalid > /tmp/host.json 2>&1"
+  dc exec -T -d "$H" sh -c "/lab/bin/connrelay-labpeer -role host -lab-id $id -server https://api.lab.invalid > /tmp/host.json 2>&1"
   sleep 0.5
   local out rc=0
-  out=$(dc exec -T "$P" timeout 90 /lab/bin/prw-labpeer -role phone -lab-id "$id" -server https://api.lab.invalid \
+  out=$(dc exec -T "$P" timeout 90 /lab/bin/connrelay-labpeer -role phone -lab-id "$id" -server https://api.lab.invalid \
         -bytes 2097152 -expect "$expect" "$@" 2>&1) || rc=$?
   sleep 0.5
   local host; host=$(dc exec -T "$H" cat /tmp/host.json 2>/dev/null | tail -1)

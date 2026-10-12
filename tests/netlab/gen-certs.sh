@@ -6,7 +6,7 @@ mkdir -p "$out"
 cd "$out"
 [[ -f ca.crt ]] && exit 0
 openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 7 \
-  -subj "/CN=PRW netlab TEST ONLY CA" -keyout ca.key -out ca.crt 2>/dev/null
+  -subj "/CN=ConnRelay netlab TEST ONLY CA" -keyout ca.key -out ca.crt 2>/dev/null
 for name in api turn; do
   openssl req -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes \
     -subj "/CN=$name.lab.invalid" -keyout $name.key -out $name.csr 2>/dev/null

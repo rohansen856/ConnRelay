@@ -7,7 +7,7 @@ toolchain go1.27.2
 require (
 	github.com/coder/websocket v1.8.15
 	github.com/pion/webrtc/v4 v4.2.23
-	github.com/rohansen856/connrelay/core/prwcore v0.0.0
+	github.com/rohansen856/connrelay/core/connrelaycore v0.0.0
 )
 
 require (
@@ -35,4 +35,4 @@ require (
 	golang.org/x/time v0.14.0 // indirect
 )
 
-replace github.com/rohansen856/connrelay/core/prwcore => ../core/prwcore
+replace github.com/rohansen856/connrelay/core/connrelaycore => ../core/connrelaycore

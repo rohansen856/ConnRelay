@@ -1,7 +1,7 @@
-// Package labclient runs one side (phone or host) of a full PRW connection
-// attempt against prw-labserver: ICE/TURN and WSS-relay paths raced by the
+// Package labclient runs one side (phone or host) of a full ConnRelay connection
+// attempt against connrelay-labserver: ICE/TURN and WSS-relay paths raced by the
 // connection manager, mutual attestation, then an integrity-checked echo of
-// terminal bytes. It backs the prw-labpeer CLI and the on-device probe.
+// terminal bytes. It backs the connrelay-labpeer CLI and the on-device probe.
 package labclient
 
 import (
@@ -24,16 +24,16 @@ import (
 	"github.com/coder/websocket"
 	pionwebrtc "github.com/pion/webrtc/v4"
 
-	"github.com/rohansen856/connrelay/core/prwcore/attest"
-	"github.com/rohansen856/connrelay/core/prwcore/connmgr"
-	"github.com/rohansen856/connrelay/core/prwcore/control"
-	"github.com/rohansen856/connrelay/core/prwcore/frame"
-	"github.com/rohansen856/connrelay/core/prwcore/peer"
-	"github.com/rohansen856/connrelay/core/prwcore/token"
-	"github.com/rohansen856/connrelay/core/prwcore/transport"
-	"github.com/rohansen856/connrelay/core/prwcore/transport/innertls"
-	"github.com/rohansen856/connrelay/core/prwcore/transport/webrtc"
-	"github.com/rohansen856/connrelay/core/prwcore/transport/wssrelay"
+	"github.com/rohansen856/connrelay/core/connrelaycore/attest"
+	"github.com/rohansen856/connrelay/core/connrelaycore/connmgr"
+	"github.com/rohansen856/connrelay/core/connrelaycore/control"
+	"github.com/rohansen856/connrelay/core/connrelaycore/frame"
+	"github.com/rohansen856/connrelay/core/connrelaycore/peer"
+	"github.com/rohansen856/connrelay/core/connrelaycore/token"
+	"github.com/rohansen856/connrelay/core/connrelaycore/transport"
+	"github.com/rohansen856/connrelay/core/connrelaycore/transport/innertls"
+	"github.com/rohansen856/connrelay/core/connrelaycore/transport/webrtc"
+	"github.com/rohansen856/connrelay/core/connrelaycore/transport/wssrelay"
 )
 
 type bundle struct {
@@ -257,7 +257,7 @@ func run(server, role, mode string, forceRelay, udpBlocked bool, fallback time.D
 	keys := token.KeySet{"lab-1": ed25519.PublicKey(tkPub)}
 	params := peer.Params{
 		Role: prole, Self: self, Peer: other, Attempt: b.AttemptID, Nonce: b.Nonce, Cap: "terminal",
-		Signer: signer, PeerKey: peerKey, Impl: "prw-labpeer",
+		Signer: signer, PeerKey: peerKey, Impl: "connrelay-labpeer",
 	}
 	if role == "phone" {
 		params.Ticket = b.Ticket

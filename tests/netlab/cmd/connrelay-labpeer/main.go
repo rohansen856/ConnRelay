@@ -1,5 +1,5 @@
-// Command prw-labpeer runs one side of a PRW connection attempt against
-// prw-labserver and prints one JSON result line (see package labclient).
+// Command connrelay-labpeer runs one side of a ConnRelay connection attempt against
+// connrelay-labserver and prints one JSON result line (see package labclient).
 package main
 
 import (
@@ -11,7 +11,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/rohansen856/connrelay/core/prwcore/connmgr"
+	"github.com/rohansen856/connrelay/core/connrelaycore/connmgr"
 	"github.com/rohansen856/connrelay/tests/netlab/labclient"
 )
 

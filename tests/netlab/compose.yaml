@@ -1,11 +1,11 @@
-# PRW network lab. Two private LANs behind Linux NAT routers share a "WAN"
+# ConnRelay network lab. Two private LANs behind Linux NAT routers share a "WAN"
 # with the control-plane stand-in (10.99.0.10:443, "EIP-A"), coturn
 # (10.99.0.20, "EIP-B", TURN on 3478 and TURN-TLS on 443) and an HTTPS-only
 # CONNECT proxy. Run via ./run.sh.
-name: prw-netlab
+name: connrelay-netlab
 
 x-node: &node
-  image: prw-netlab-node:latest
+  image: connrelay-netlab-node:latest
   build: { context: ., dockerfile: Dockerfile.node }
   cap_add: [NET_ADMIN]
   volumes:
@@ -28,12 +28,12 @@ services:
   api:
     <<: *node
     command: >-
-      /lab/bin/prw-labserver -addr 10.99.0.10:443 -public-url https://api.lab.invalid
+      /lab/bin/connrelay-labserver -addr 10.99.0.10:443 -public-url https://api.lab.invalid
       -tls-cert /lab/certs/api.crt -tls-key /lab/certs/api.key
       -stun-urls stun:turn.lab.invalid:3478
       -turn-urls turn:turn.lab.invalid:3478?transport=udp,turn:turn.lab.invalid:3478?transport=tcp,turns:turn.lab.invalid:443?transport=tcp
     environment:
-      PRW_TURN_SHARED_SECRET: TEST-ONLY-netlab-turn-secret
+      CONNRELAY_TURN_SHARED_SECRET: TEST-ONLY-netlab-turn-secret
     networks: { wan: { ipv4_address: 10.99.0.10 } }
 
   turn:
