@@ -51,7 +51,7 @@ Terminal data is end-to-end encrypted on every path and bound to the enrolled de
    - TURN and the WSS relay are unavailable;
    - existing direct sessions continue for at most 10 minutes (the grant lease).
 4. The phone must be in the foreground. Suspension drops the connection, and the app reconnects and reattaches when it comes back.
-5. The server sees metadata (device IDs, timing, volume, IP addresses, SDP/ICE) but never terminal content. PRW is not "zero-knowledge".
+5. The server sees metadata (device IDs, timing, volume, IP addresses, SDP/ICE) but never terminal content. ConnRelay is not "zero-knowledge".
 6. Only networks in the published tested-network matrix are claimed to work.
 7. A granted phone has every privilege of the host OS user that runs the agent.
 8. When several phones attach to the same session, their keystrokes interleave.

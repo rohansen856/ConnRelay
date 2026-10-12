@@ -5,7 +5,7 @@
 
 Every result below comes from a test or script in this repository. The commands to reproduce it are listed with each spike.
 
-> **Historical record.** After Gate A the throwaway spike app (`apps/mobile_spike/`, package `dev.prw.prw_spike`) and its on-device harness (`tests/devicelab/`) were removed; the product app in `apps/mobile/` replaced them. Commands below that need them work only from a checkout of the git history before the commit `chore(mobile): remove the spike app`. The network lab, `make spike-s4` and the S5 capture script are still current.
+> **Historical record.** After Gate A the throwaway spike app (`apps/mobile_spike/`, package `dev.connrelay.connrelay_spike`) and its on-device harness (`tests/devicelab/`) were removed; the product app in `apps/mobile/` replaced them. Commands below that need them work only from a checkout of the git history before the commit `chore(mobile): remove the spike app`. The network lab, `make spike-s4` and the S5 capture script are still current.
 
 ## Summary
 
@@ -26,7 +26,7 @@ Every result below comes from a test or script in this repository. The commands 
 
 **Setup.**
 - Device: A059P running Android 16 (API 36), arm64.
-- The Flutter app embeds `prwcore` through `gomobile bind`. The phone side of each attempt runs in-process and signs its attestation with the Keystore key from S6.
+- The Flutter app embeds `connrelaycore` through `gomobile bind`. The phone side of each attempt runs in-process and signs its attestation with the Keystore key from S6.
 - The host is a Linux laptop on the phone's Wi-Fi hotspot.
 - Run (at the time) with `make aar`, then `flutter build apk`, then `LAN_IP=… make devicelab`. These targets were removed with the spike app.
 
@@ -101,7 +101,7 @@ Many home routers behave differently, so the lab only demonstrates that the fall
 | Phone allowed only TCP to an HTTPS CONNECT proxy; squid permits only `CONNECT api.lab.invalid:443` | PASS: `wss_relay` at the 4 s fallback |
 | The same, with the cached "UDP blocked" hint | PASS: `wss_relay` connected in 4 ms (WSS starts at t=0) |
 | TURN server down and UDP blocked | PASS: `wss_relay` |
-| Peer certificate fingerprint swapped in signaling | Rejected by inner TLS and by attestation (unit tests in `services/control/internal/relay`, `core/prwcore/peer`) |
+| Peer certificate fingerprint swapped in signaling | Rejected by inner TLS and by attestation (unit tests in `services/control/internal/relay`, `core/connrelaycore/peer`) |
 | Forged, reused, wrong-attempt or wrong-role relay token; a second peer with the same role | Rejected (relay unit tests) |
 | Relay rate cap (2 Mbit/s) and per-attempt byte cap | Enforced (relay unit tests; measured at about 2.06 Mbit/s) |
 
@@ -166,13 +166,13 @@ Key encodings for Esc, Tab, Enter, Backspace and Ctrl chords, and bracketed past
 
 | Change | Where |
 |---|---|
-| **`path.select`.** The phone (controlling side) chooses the winning transport and announces it, and the host commits to that transport. Without it, near-simultaneous ICE and WSS completions could leave the two sides on different paths. | `core/prwcore/connmgr`, [protocol](../technical/protocol.md) |
+| **`path.select`.** The phone (controlling side) chooses the winning transport and announces it, and the host commits to that transport. Without it, near-simultaneous ICE and WSS completions could leave the two sides on different paths. | `core/connrelaycore/connmgr`, [protocol](../technical/protocol.md) |
 | **Go toolchain moved to 1.27.2 (module minimum 1.26).** Go 1.25.5 had reachable standard-library vulnerabilities, and `golang.org/x/mobile` needs 1.26 or later. govulncheck now reports no reachable vulnerabilities. | all `go.mod`, CI |
 | **Pion on Android needs `-ldflags=-checklinkname=0`.** `wlynxg/anet` links to a `net` internal. | `apps/mobile/gocore/build-aar.sh` |
 | **Bounded transport close.** Tearing down Pion over TURN-TLS can stall for more than 3 s, so the close must not block reporting or reconnect. | `tests/netlab/labclient`; to carry into the app's connection lifecycle |
 | **coturn 4.18 deprecates `no-cli`.** | lab configs |
 | **App logs on some OEM builds.** Some Android builds drop app INFO logs unless `log.tag` is raised. In-app diagnostics must not depend on logcat. | the former `tests/devicelab/run.sh` |
-| **Flow-control fixes:** credit after close (fixed a panic), and non-blocking input. | `core/prwcore/flow`, `agents/host/internal/termstream` |
+| **Flow-control fixes:** credit after close (fixed a panic), and non-blocking input. | `core/connrelaycore/flow`, `agents/host/internal/termstream` |
 
 ## Open items before Gate A
 

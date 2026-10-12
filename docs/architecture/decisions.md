@@ -6,7 +6,7 @@
 |---|---|---|
 | 001 | App-level remote terminal, not a VPN | Accepted |
 | 002 | Data plane: WebRTC primary, WSS relay fallback | Accepted (fallback timing proposed) |
-| 003 | Shared Go transport core (`prwcore`) on phone and host | Accepted (Android); iOS pending |
+| 003 | Shared Go transport core (`connrelaycore`) on phone and host | Accepted (Android); iOS pending |
 | 004 | WSS relay with end-to-end TLS 1.3 and identity attestation | Accepted (need) / Proposed (mechanism) |
 | 005 | coturn ≥ 4.18 on a dedicated IP, ephemeral credentials, hardened | Proposed |
 | 006 | Single EC2 instance with two Elastic IPs | Accepted |
@@ -27,7 +27,7 @@
   - the iOS Network Extension entitlement
   - routing, DNS and firewall changes on hosts
   - a much larger security surface
-- **Decision:** V1 opens an application-level encrypted channel that carries only PRW control and terminal frames. It provides no TUN interface, no subnet routing and no TCP forwarding.
+- **Decision:** V1 opens an application-level encrypted channel that carries only ConnRelay control and terminal frames. It provides no TUN interface, no subnet routing and no TCP forwarding.
 - **Alternatives considered:**
   - WireGuard overlay: deferred to a separate future track.
   - Port forwarding: deferred to a later capability.
@@ -90,7 +90,7 @@ Rating scale: ●●● good · ●● acceptable · ● poor.
 - Diagnostics report three path types: `direct`, `turn` and `wss_relay`.
 - Relayed bytes count toward EC2 egress.
 
-## ADR-003: Shared Go transport core (`prwcore`)
+## ADR-003: Shared Go transport core (`connrelaycore`)
 
 - **Status:** Accepted for Android (decision D-22): spike S1 passed direct, TURN, WSS relay and auto modes on a real device (see [spike results](../development/spike-results.md)), and the app ships the gomobile core. iOS must still pass the same suite.
 - **Context:**
@@ -98,12 +98,12 @@ Rating scale: ●●● good · ●● acceptable · ● poor.
   - The libwebrtc ↔ Pion interop must be proven.
   - The WSS fallback needs TLS 1.3 over an arbitrary byte stream, which Dart's `SecureSocket` cannot wrap directly.
   - Without a shared core, framing and attestation would be written twice.
-- **Decision:** One Go module, `prwcore`, contains:
+- **Decision:** One Go module, `connrelaycore`, contains:
   - the Pion transport, the relay transport and `crypto/tls`
   - framing, flow control and attestation
   - the connection manager
 
-  The host agent links it directly. The phone links it with **gomobile** through the narrow `prwcore/mobile` facade (`Connect`, `Open`, `Attach`, `List`, `Input`, `Resize`, `Detach`, `Terminate`, `Close`, plus `SignPoP` for sign-in and refresh). Device-key signatures are produced by callbacks into the platform keystore, so phone private keys never enter Go memory.
+  The host agent links it directly. The phone links it with **gomobile** through the narrow `connrelaycore/mobile` facade (`Connect`, `Open`, `Attach`, `List`, `Input`, `Resize`, `Detach`, `Terminate`, `Close`, plus `SignPoP` for sign-in and refresh). Device-key signatures are produced by callbacks into the platform keystore, so phone private keys never enter Go memory.
 - **Spike pass criteria:**
   - Terminal bytes flow both ways on real Android and iOS devices over direct, TURN-UDP, TURN-TLS:443 and WSS.
   - App size grows by ≤ 25 MB per ABI.
@@ -181,7 +181,7 @@ Rating scale: ●●● good · ●● acceptable · ● poor.
   - Bearer tokens alone are insufficient.
   - Hardware keystores (iOS Secure Enclave, Android StrongBox) support P-256 but not Ed25519.
 - **Decision:**
-  1. **Sign-in.** The phone obtains a Google ID token with the platform Google Sign-In SDK (`google_sign_in`, initialised with the server's web client ID and a nonce). The server validates the ID token (issuer, audience, signature via JWKS, expiry, nonce) and accepts only subjects listed in `PRW_ALLOWED_SUBJECTS`. A denied sign-in is logged with its Google subject so the operator can add it to the allowlist.
+  1. **Sign-in.** The phone obtains a Google ID token with the platform Google Sign-In SDK (`google_sign_in`, initialised with the server's web client ID and a nonce). The server validates the ID token (issuer, audience, signature via JWKS, expiry, nonce) and accepts only subjects listed in `CONNRELAY_ALLOWED_SUBJECTS`. A denied sign-in is logged with its Google subject so the operator can add it to the allowlist.
   2. **Device registration.** The sign-in exchange also registers the phone's device public key, proven by a signature over a server nonce.
      - A new phone needs **no further approval**. It starts with no grants, and the owner then grants it access to specific hosts.
   3. **Tokens.**
@@ -208,7 +208,7 @@ Rating scale: ●●● good · ●● acceptable · ● poor.
 - **Context:** Sessions must survive phone disconnects, app death and agent restarts. Prior art such as Eternal Terminal separates session identity from transport identity.
 - **Decision:**
   - **When tmux ≥ 3.0 is present:**
-    - The agent creates one tmux session per PRW session (`prw-<uuid>`) on a private socket in `$XDG_RUNTIME_DIR/prw/` (directory mode 0700), using an agent-supplied config with `window-size latest` and a 50 000-line history.
+    - The agent creates one tmux session per ConnRelay session (`connrelay-<uuid>`) on a private socket in `$XDG_RUNTIME_DIR/connrelay/` (directory mode 0700), using an agent-supplied config with `window-size latest` and a 50 000-line history.
     - Streaming uses `tmux attach` inside a PTY the agent owns, so tmux redraws the screen on reattach. A disconnect kills only the attach client.
     - The agent runs as a `systemd --user` service with lingering and `KillMode=process`, so restarting the agent never kills tmux (spike S4). Starting tmux through `systemd-run --user --scope` was considered and is not needed.
   - **Without tmux:** the agent uses a plain PTY with a bounded ring buffer. The session survives disconnects but not agent restarts, and the agent flags it as non-persistent.
@@ -294,7 +294,7 @@ Rating scale: ●●● good · ●● acceptable · ● poor.
     - `flutter_secure_storage`
     - `mobile_scanner` for QR codes
   - **Terminal:** the vendored xterm.dart fork.
-  - **Transport:** the gomobile core is reached through a Kotlin bridge (MethodChannel `prw/core`, EventChannel `prw/core/events`) behind a Dart interface, with a fake implementation for widget tests.
+  - **Transport:** the gomobile core is reached through a Kotlin bridge (MethodChannel `connrelay/core`, EventChannel `connrelay/core/events`) behind a Dart interface, with a fake implementation for widget tests.
 - **Alternatives:**
   - Bloc.
   - A custom terminal renderer: too costly.

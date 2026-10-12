@@ -1,7 +1,7 @@
 # Host Agent
 
 > **Status:** Implemented for V1 and in daily use. Items still on the roadmap are marked **(planned)**; everything else describes the code as it is.
-> **Location:** `agents/host/` · **Binary:** `prw-agent` · **Platforms:** Linux amd64/arm64 (Ubuntu 22.04 / 24.04 baseline)
+> **Location:** `agents/host/` · **Binary:** `connrelay-agent` · **Platforms:** Linux amd64/arm64 (Ubuntu 22.04 / 24.04 baseline)
 
 The host agent is a small, **non-root** daemon running on each Linux computer. Its jobs:
 
@@ -10,13 +10,13 @@ The host agent is a small, **non-root** daemon running on each Linux computer. I
 - Accept phone connections, but only after verifying the ticket, the signed grant lease and the peer's identity.
 - Bridge terminal streams to persistent tmux sessions.
 
-It is a single Go binary (`go build ./agents/host/cmd/prw-agent`).
+It is a single Go binary (`go build ./agents/host/cmd/connrelay-agent`).
 
 ## Principles
 
 | Principle | Consequence |
 |---|---|
-| Never root | Runs as the user, normally as a `systemd --user` service. `prw-agent run` refuses to start when `euid == 0`. |
+| Never root | Runs as the user, normally as a `systemd --user` service. `connrelay-agent run` refuses to start when `euid == 0`. |
 | Fail closed | No PTY without a valid lease, ticket, attestation and local policy match. |
 | Process lifetime ≠ connection lifetime | tmux is a separate server process and the unit uses `KillMode=process`, so restarting or upgrading the agent never kills a session. |
 | No terminal content leaves the data channel | Logs, metrics and the control socket carry metadata only. |
@@ -28,7 +28,7 @@ It is a single Go binary (`go build ./agents/host/cmd/prw-agent`).
 
 ```text
 agents/host/
-  cmd/prw-agent/main.go   # CLI: pair | run | status | unpair --local | version
+  cmd/connrelay-agent/main.go   # CLI: pair | run | status | unpair --local | version
   internal/
     agentcfg/    config directory, P-256 host key (0600), agent.json state (server, device, pinned JWKS)
     pairclient/  pairing flow against /v1/pairing/*, terminal QR rendering
@@ -38,10 +38,10 @@ agents/host/
     termstream/  PTY ↔ data-channel stream bridge with credit flow control
     tmux/        private tmux server: create, attach, list, kill
     ptyproc/     PTY process start and resize (dimensions clamped to 1–1000)
-  packaging/     prw-agent.service (systemd --user unit), install.sh
+  packaging/     connrelay-agent.service (systemd --user unit), install.sh
 ```
 
-The transport, framing, attestation, ticket and connection-manager code comes from the shared core (see [prwcore](prwcore.md)).
+The transport, framing, attestation, ticket and connection-manager code comes from the shared core (see [connrelaycore](connrelaycore.md)).
 
 ---
 
@@ -49,11 +49,11 @@ The transport, framing, attestation, ticket and connection-manager code comes fr
 
 | Command | Purpose |
 |---|---|
-| `prw-agent pair --server URL [--name NAME] [--json]` | Creates the identity key if it is missing and opens a pairing challenge. Prints a QR code, an 8-character code and the key fingerprint, then long-polls until the phone approves (the challenge expires after 5 min). Completes with a signed proof of possession and saves the server URL, device ID and pinned verification keys. `--server` must be https (plain http only for loopback). `--json` prints the challenge for automation. Refuses if already paired. |
-| `prw-agent run` | Foreground daemon; this is what the systemd unit executes. Exits with status 3 if the computer was revoked. |
-| `prw-agent status` | Paired state, server, device ID and key fingerprint. |
-| `prw-agent unpair --local` | Forgets the enrolment on this machine. Revoke the computer from the app first. |
-| `prw-agent version` | Version. |
+| `connrelay-agent pair --server URL [--name NAME] [--json]` | Creates the identity key if it is missing and opens a pairing challenge. Prints a QR code, an 8-character code and the key fingerprint, then long-polls until the phone approves (the challenge expires after 5 min). Completes with a signed proof of possession and saves the server URL, device ID and pinned verification keys. `--server` must be https (plain http only for loopback). `--json` prints the challenge for automation. Refuses if already paired. |
+| `connrelay-agent run` | Foreground daemon; this is what the systemd unit executes. Exits with status 3 if the computer was revoked. |
+| `connrelay-agent status` | Paired state, server, device ID and key fingerprint. |
+| `connrelay-agent unpair --local` | Forgets the enrolment on this machine. Revoke the computer from the app first. |
+| `connrelay-agent version` | Version. |
 
 `sessions`, `logs`, `doctor`, `install-service` and a server-side `unpair` are **(planned)**.
 
@@ -63,28 +63,28 @@ The transport, framing, attestation, ticket and connection-manager code comes fr
 
 | Path | Content | Mode |
 |---|---|---|
-| `$XDG_CONFIG_HOME/prw/host_key.pem` (default `~/.config/prw/`) | ECDSA P-256 private key | 0600 (directory 0700) |
-| `$XDG_CONFIG_HOME/prw/agent.json` | Server URL, control WebSocket URL, device ID, account ID, pinned ticket-key JWKS | 0600 |
-| `$XDG_RUNTIME_DIR/prw/tmux.sock` | Private tmux server socket | 0600 (directory 0700) |
+| `$XDG_CONFIG_HOME/connrelay/host_key.pem` (default `~/.config/connrelay/`) | ECDSA P-256 private key | 0600 (directory 0700) |
+| `$XDG_CONFIG_HOME/connrelay/agent.json` | Server URL, control WebSocket URL, device ID, account ID, pinned ticket-key JWKS | 0600 |
+| `$XDG_RUNTIME_DIR/connrelay/tmux.sock` | Private tmux server socket | 0600 (directory 0700) |
 
-`PRW_AGENT_CONFIG_DIR` overrides the configuration directory (tests, several agents on one machine). The agent has no configuration file yet: limits are code constants (§6.3). A TOML configuration file, a persisted lease snapshot and a local admin socket are **(planned)**.
+`CONNRELAY_AGENT_CONFIG_DIR` overrides the configuration directory (tests, several agents on one machine). The agent has no configuration file yet: limits are code constants (§6.3). A TOML configuration file, a persisted lease snapshot and a local admin socket are **(planned)**.
 
 ---
 
 ## 4. systemd user unit
 
-`agents/host/packaging/install.sh path/to/prw-agent` installs the binary to `~/.local/bin` and the unit below to `~/.config/systemd/user/`, without root.
+`agents/host/packaging/install.sh path/to/connrelay-agent` installs the binary to `~/.local/bin` and the unit below to `~/.config/systemd/user/`, without root.
 
 ```ini
-# ~/.config/systemd/user/prw-agent.service
+# ~/.config/systemd/user/connrelay-agent.service
 [Unit]
-Description=Private Remote Workspace host agent
+Description=ConnRelay host agent
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=exec
-ExecStart=%h/.local/bin/prw-agent run
+ExecStart=%h/.local/bin/connrelay-agent run
 Restart=always
 RestartSec=3
 KillMode=process
@@ -98,7 +98,7 @@ WantedBy=default.target
 
 Notes on the unit:
 
-- `KillMode=process` is required: tmux is started by the agent, and only the agent process may be stopped on restart. `tests/spikes/s4_systemd_restart.sh` (`make spike-s4`) verifies that `systemctl --user restart prw-agent` leaves sessions alive.
+- `KillMode=process` is required: tmux is started by the agent, and only the agent process may be stopped on restart. `tests/spikes/s4_systemd_restart.sh` (`make spike-s4`) verifies that `systemctl --user restart connrelay-agent` leaves sessions alive.
 - `loginctl enable-linger $USER` keeps the user manager running without a login session, which keeps the agent and tmux alive while logged out.
 - `ProtectHome` and `PrivateTmp` are deliberately **not** set. Shells must see the real home directory.
 
@@ -109,7 +109,7 @@ Notes on the unit:
 ```mermaid
 stateDiagram-v2
   [*] --> init: refuse root, load agent.json and host key
-  init --> [*]: not paired (exit 1, "run prw-agent pair")
+  init --> [*]: not paired (exit 1, "run connrelay-agent pair")
   init --> connecting: paired
   connecting --> online: signed challenge accepted (auth.ok)
   connecting --> backoff: error
@@ -130,12 +130,12 @@ Graceful drain notices to peers, `SIGHUP` reload and session reconciliation on s
 
 ## 6. Sessions (tmux)
 
-The agent runs its own tmux server (≥ 3.0) on a private socket. The user's own tmux server is never touched, and only sessions named `prw-<id>` are managed. If tmux is missing or too old, the agent still connects and pairs, but terminal sessions are disabled and it logs a warning; a plain-PTY fallback is **(planned)**.
+The agent runs its own tmux server (≥ 3.0) on a private socket. The user's own tmux server is never touched, and only sessions named `connrelay-<id>` are managed. If tmux is missing or too old, the agent still connects and pairs, but terminal sessions are disabled and it logs a warning; a plain-PTY fallback is **(planned)**.
 
 | Operation | Command (argv; never via a shell) |
 |---|---|
-| Create | `tmux -S $SOCK new-session -d -s prw-<id> -x C -y R …` running `$SHELL -l` in the home directory, then per-session options: `status off`, `history-limit 50000`, `remain-on-exit off`, `window-size latest`, `aggressive-resize on` |
-| Attach | Allocate a PTY, set its size, and run `tmux attach-session -t prw-<id>` on it. Bridge the PTY bytes to the terminal stream. tmux repaints the full screen on attach, so the screen is correct after a reconnect. |
+| Create | `tmux -S $SOCK new-session -d -s connrelay-<id> -x C -y R …` running `$SHELL -l` in the home directory, then per-session options: `status off`, `history-limit 50000`, `remain-on-exit off`, `window-size latest`, `aggressive-resize on` |
+| Attach | Allocate a PTY, set its size, and run `tmux attach-session -t connrelay-<id>` on it. Bridge the PTY bytes to the terminal stream. tmux repaints the full screen on attach, so the screen is correct after a reconnect. |
 | Detach | Close the attach PTY. The tmux client exits and the session keeps running. Every attach is detached when the transport drops. |
 | Resize | `TIOCSWINSZ` on the attach PTY, clamped to 1–1000 cells. With `window-size latest`, tmux follows the most recent client. |
 | List | `list-sessions` on the private socket. |
@@ -159,7 +159,7 @@ Sessions survive disconnects and agent restarts; after an agent restart they are
 | Concurrent peer connections | 8 (`runtime.MaxPeers`) | runtime (`host_capacity_reached`) |
 | Connect window per attempt | 30 s | runtime |
 | Terminal dimensions | 1–1000 cols/rows | `ptyproc` |
-| Frame payload | 16 KiB | prwcore `frame` |
+| Frame payload | 16 KiB | connrelaycore `frame` |
 
 ---
 
@@ -167,8 +167,8 @@ Sessions survive disconnects and agent restarts; after an agent restart they are
 
 | Aspect | Design |
 |---|---|
-| Transport | `coder/websocket` to the `control_ws_url` saved at pairing (`wss://…/v1/agent/control`), subprotocol `prw.v1`, system TLS roots. No credentials in the URL. |
-| Auth | The server sends `auth.challenge{nonce}`. The agent replies `auth.response` with an ES256 JWS over JCS `{purpose:"prw.agent.v1", nonce, device_id, iat}`. The server answers `auth.ok`, then `grant.lease`. Every reconnect does full re-authentication. |
+| Transport | `coder/websocket` to the `control_ws_url` saved at pairing (`wss://…/v1/agent/control`), subprotocol `connrelay.v1`, system TLS roots. No credentials in the URL. |
+| Auth | The server sends `auth.challenge{nonce}`. The agent replies `auth.response` with an ES256 JWS over JCS `{purpose:"connrelay.agent.v1", nonce, device_id, iat}`. The server answers `auth.ok`, then `grant.lease`. Every reconnect does full re-authentication. |
 | Inbound allowlist | `grant.lease`, `revoke_notice`, `attempt.incoming`, `attempt.cancel`, `signal`, `heartbeat.ack`, `jwks.update`, `server.notice`, `pairing.approved`. Any other type is dropped and logged. |
 | Heartbeat | Every 25 s: `{agent_version, capabilities{tmux, peers}}`. The server answers `heartbeat.ack`. |
 | Silence detection | Each read has a 75 s deadline (`runtime.SilenceLimit`, 3 heartbeats). A socket that delivers nothing for that long is treated as half-open (for example after a NAT remap or a proxy drop), abandoned and re-dialled. The server applies the same limit from its side and closes silent agent sockets with 4408. |
@@ -278,10 +278,10 @@ Until both sides have sent `peer.identity_verified`, any message other than the 
 
 | Item | Today | Planned |
 |---|---|---|
-| Build | `go build -o ~/.local/bin/prw-agent ./agents/host/cmd/prw-agent` | `goreleaser`, linux/amd64 + linux/arm64, `-trimpath`, version injected |
-| Install | `agents/host/packaging/install.sh`, then `prw-agent pair --server URL` and `systemctl --user enable --now prw-agent` | `.deb` via `nfpm`, with `tmux (>= 3.0)` as *Recommends*, plus a tarball |
+| Build | `go build -o ~/.local/bin/connrelay-agent ./agents/host/cmd/connrelay-agent` | `goreleaser`, linux/amd64 + linux/arm64, `-trimpath`, version injected |
+| Install | `agents/host/packaging/install.sh`, then `connrelay-agent pair --server URL` and `systemctl --user enable --now connrelay-agent` | `.deb` via `nfpm`, with `tmux (>= 3.0)` as *Recommends*, plus a tarball |
 | Signing | — | `SHA256SUMS` signed with minisign, plus an SPDX SBOM |
-| Upgrade | Replace the binary, then `systemctl --user restart prw-agent`. Sessions survive. | Signed update manifest with rollback |
+| Upgrade | Replace the binary, then `systemctl --user restart connrelay-agent`. Sessions survive. | Signed update manifest with rollback |
 
 The agent reports its version in every heartbeat.
 
@@ -295,5 +295,5 @@ The agent reports its version in every heartbeat.
 | Integration (real tmux) | Create, attach, type, detach, reattach and compare the screen; resize; terminate; sessions survive transport loss (`tmux`, `termserver`, `termclient` tests). |
 | Runtime | The agent re-dials a control socket that goes silent (`TestReconnectsWhenServerGoesSilent`). |
 | With control plane (`services/control/internal/e2e`) | Pairing, lease delivery, direct WebRTC and WSS-relay connections, `ended_at` on disconnect, reattach to the same shell, revoke drops the phone within 30 s and leaves tmux running. |
-| systemd | `make spike-s4`: tmux survives `systemctl --user restart prw-agent`. |
+| systemd | `make spike-s4`: tmux survives `systemctl --user restart connrelay-agent`. |
 | Fuzz, packaging **(planned)** | Frame decoder, control JSON decoder, ticket parser; package install, upgrade and uninstall. |

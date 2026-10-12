@@ -14,7 +14,7 @@
 | [components/control-plane.md](components/control-plane.md) | Go control plane |
 | [components/host-agent.md](components/host-agent.md) | Linux host agent and tmux session manager |
 | [components/mobile-app.md](components/mobile-app.md) | Flutter phone app |
-| [components/prwcore.md](components/prwcore.md) | Shared Go protocol and transport core |
+| [components/connrelaycore.md](components/connrelaycore.md) | Shared Go protocol and transport core |
 | **Operations** | |
 | [operations/deployment.md](operations/deployment.md) | Local dev stack, AWS deployment (planned), alternative hosts, coturn, TLS, backups, CI/CD |
 | [operations/runbooks.md](operations/runbooks.md) | Operational procedures, incident response, dev stack troubleshooting |

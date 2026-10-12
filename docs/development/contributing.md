@@ -5,16 +5,16 @@
 ## Repository layout
 
 ```text
-go.work                       # Go workspace: core/prwcore, services/control, agents/host, tests
+go.work                       # Go workspace: core/connrelaycore, services/control, agents/host, tests
 Makefile                      # vet, test, test-race, mobile, netlab, spike-s4, ci
 apps/mobile/                  # Flutter app: lib/{app,core,features,widgets}, test/, android/, ios/,
                               #   gocore/build-aar.sh (gomobile AAR), third_party/xterm (vendored fork)
-core/prwcore/                 # shared Go: frame, flow, attest, token, transport, peer, connmgr, control,
+core/connrelaycore/                 # shared Go: frame, flow, attest, token, transport, peer, connmgr, control,
                               #   client (phone connect), termclient, mobile (gomobile facade)
-services/control/             # control plane: cmd/prw-control (serve, check-config, keygen), cmd/prw-labserver,
+services/control/             # control plane: cmd/connrelay-control (serve, check-config, keygen), cmd/connrelay-labserver,
                               #   internal/{auth,google,tokens,nonce,inventory,pairing,connections,hub,relay,
                               #   turncred,outbox,store,db,httpx,config,server,...}, migrations/ (goose, embedded)
-agents/host/                  # host agent: cmd/prw-agent (pair, run, status, unpair, version),
+agents/host/                  # host agent: cmd/connrelay-agent (pair, run, status, unpair, version),
                               #   internal/{agentcfg,pairclient,lease,runtime,termserver,termstream,tmux,ptyproc},
                               #   packaging/ (systemd user unit, install.sh)
 protocol/vectors/             # golden test vectors (frames)
@@ -49,29 +49,29 @@ The full stack (Postgres, control plane and a public HTTPS URL for a real phone)
 deploy/dev/devstack.sh up                 # prints the public URL; `down` stops it
 
 # Host agent against the local control plane
-go build -o ~/.local/bin/prw-agent ./agents/host/cmd/prw-agent
-prw-agent pair --server "$(cat ~/.local/share/prw-dev/public_url)"
-prw-agent run
+go build -o ~/.local/bin/connrelay-agent ./agents/host/cmd/connrelay-agent
+connrelay-agent pair --server "$(cat ~/.local/share/connrelay-dev/public_url)"
+connrelay-agent run
 
 # Phone app (Android device over adb)
 apps/mobile/gocore/build-aar.sh
 cd apps/mobile && flutter build apk --release \
-  --dart-define=PRW_API="$(cat ~/.local/share/prw-dev/public_url)" \
-  --dart-define=PRW_GOOGLE_SERVER_CLIENT_ID=<web client id>
+  --dart-define=CONNRELAY_API="$(cat ~/.local/share/connrelay-dev/public_url)" \
+  --dart-define=CONNRELAY_GOOGLE_SERVER_CLIENT_ID=<web client id>
 
 # Tests
-PRW_REQUIRE_DB=1 make test-race
+CONNRELAY_REQUIRE_DB=1 make test-race
 make mobile
 ```
 
-The dev stack generates throwaway keys with `prw-control keygen` into `~/.local/share/prw-dev/secrets`. Never use production secrets locally.
+The dev stack generates throwaway keys with `connrelay-control keygen` into `~/.local/share/connrelay-dev/secrets`. Never use production secrets locally.
 
 ## Coding conventions
 
 ### Go
 
 - Format with `gofmt`/`goimports` and lint with `golangci-lint`. The configuration lives in the repo.
-- Use `internal/` packages per bounded context. Do not share packages between the control plane and the agent except through `core/prwcore`.
+- Use `internal/` packages per bounded context. Do not share packages between the control plane and the agent except through `core/connrelaycore`.
 - Pass `context.Context` explicitly and put timeouts on all I/O. Use monotonic clocks for timeouts.
 - Database access uses **pgx v5** with hand-written, parameterized SQL only. Transaction boundaries are explicit in the service layer.
 - Log with `log/slog` (JSON). Use the redaction allowlist: log IDs, codes and durations, never payloads.
@@ -94,7 +94,7 @@ The dev stack generates throwaway keys with `prw-control keygen` into `~/.local/
 
 ## Protocol change process
 
-The wire protocol is implemented once, in Go (`core/prwcore`), and reaches the app through the gomobile facade, so the app never re-implements framing or attestation. Every change still goes through the spec and the vectors:
+The wire protocol is implemented once, in Go (`core/connrelaycore`), and reaches the app through the gomobile facade, so the app never re-implements framing or attestation. Every change still goes through the spec and the vectors:
 
 1. Update the normative spec in [protocol](../technical/protocol.md) (a machine-readable `protocol/openapi.yaml` and JSON Schemas are planned).
 2. Add or update the **golden vectors** in `protocol/vectors/`, as bytes or JSON together with the expected decoded values.

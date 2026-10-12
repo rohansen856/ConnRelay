@@ -3,7 +3,7 @@
 > **Status:** Implemented for Android and in daily use against a real host. The iOS bridge and the larger design below marked **(planned)** are not built yet.
 > **Location:** `apps/mobile/` · **Platforms:** Android (iOS planned), foreground use · **Toolchain:** Flutter 3.41 / Dart 3.11
 
-The phone app is how users interact with PRW. It handles:
+The phone app is how users interact with ConnRelay. It handles:
 
 - sign-in with Google
 - pairing computers
@@ -30,14 +30,14 @@ flowchart TB
     API[ApiClient - package:http] ; Store[SessionStore - secure storage] ; Native[NativeCore]
   end
   subgraph Android
-    MA[MainActivity.kt - prw/core channels] ; Core[prwcore AAR - gomobile] ; KS[DeviceKey.kt - Android Keystore]
+    MA[MainActivity.kt - connrelay/core channels] ; Core[connrelaycore AAR - gomobile] ; KS[DeviceKey.kt - Android Keystore]
   end
   UI --> State --> Data
   Native --> MA --> Core
   MA --> KS
 ```
 
-All protocol work runs in the shared Go core (see [prwcore](prwcore.md)), bound with gomobile: the path race between WebRTC and the WSS relay, inner TLS, attestation, framing and flow control. Dart only sees a verified session.
+All protocol work runs in the shared Go core (see [connrelaycore](connrelaycore.md)), bound with gomobile: the path race between WebRTC and the WSS relay, inner TLS, attestation, framing and flow control. Dart only sees a verified session.
 
 ### Folder structure
 
@@ -56,10 +56,10 @@ apps/mobile/
       terminal/   terminal_screen.dart, terminal_controller.dart, accessory_bar.dart
       settings/   settings_screen.dart
     widgets/    error_view.dart, status_badge.dart
-  android/app/src/main/kotlin/dev/prw/app/
-    MainActivity.kt   # MethodChannel prw/core, EventChannel prw/core/events
+  android/app/src/main/kotlin/dev/connrelay/app/
+    MainActivity.kt   # MethodChannel connrelay/core, EventChannel connrelay/core/events
     DeviceKey.kt      # Android Keystore P-256 identity key
-  gocore/build-aar.sh # builds android/app/libs/prwcore.aar (gitignored)
+  gocore/build-aar.sh # builds android/app/libs/connrelaycore.aar (gitignored)
   third_party/xterm/  # vendored xterm.dart fork
   test/
 ```
@@ -83,14 +83,14 @@ Analytics and crash-reporting SDKs are deliberately excluded.
 Values are passed at build time; none are secrets.
 
 ```sh
-apps/mobile/gocore/build-aar.sh          # Go core → android/app/libs/prwcore.aar
+apps/mobile/gocore/build-aar.sh          # Go core → android/app/libs/connrelaycore.aar
 cd apps/mobile
 flutter build apk --release \
-  --dart-define=PRW_API=https://api.example.invalid \
-  --dart-define=PRW_GOOGLE_SERVER_CLIENT_ID=<web-client-id>.apps.googleusercontent.com
+  --dart-define=CONNRELAY_API=https://api.example.invalid \
+  --dart-define=CONNRELAY_GOOGLE_SERVER_CLIENT_ID=<web-client-id>.apps.googleusercontent.com
 ```
 
-The AAR build uses `GOWORK=off`, Android API 26, `-javapkg dev.prw.core` (so the facade is `dev.prw.core.mobile`) and `-ldflags=-checklinkname=0`, which Pion's Android interface enumeration needs.
+The AAR build uses `GOWORK=off`, Android API 26, `-javapkg dev.connrelay.core` (so the facade is `dev.connrelay.core.mobile`) and `-ldflags=-checklinkname=0`, which Pion's Android interface enumeration needs.
 
 ---
 
@@ -121,7 +121,7 @@ sequenceDiagram
   App->>API: POST /v1/auth/challenge → nonce
   App->>G: google_sign_in authenticate (serverClientId, nonce)
   G-->>App: id_token
-  App->>App: Keystore key → SPKI + fingerprint; sign PoP (purpose prw.auth.v1, nonce, spki_fp) in the Go core
+  App->>App: Keystore key → SPKI + fingerprint; sign PoP (purpose connrelay.auth.v1, nonce, spki_fp) in the Go core
   App->>API: POST /v1/auth/exchange
   API-->>App: access token, refresh token, device_id
 ```
@@ -134,7 +134,7 @@ Google is the only identity provider. The server accepts only allowlisted Google
 |---|---|
 | Access token | Held by `AuthController`; restored with the session |
 | Refresh token | Secure storage. On rotation, the new token is saved before it is used. |
-| Refresh | `ApiClient` refreshes once on `401 unauthenticated` and retries the request once. Concurrent refreshes share one call. The refresh signs a server nonce with the device key (`prw.refresh.v1`). A 401/403 from refresh signs the phone out locally. |
+| Refresh | `ApiClient` refreshes once on `401 unauthenticated` and retries the request once. Concurrent refreshes share one call. The refresh signs a server nonce with the device key (`connrelay.refresh.v1`). A 401/403 from refresh signs the phone out locally. |
 | Logout | `POST /v1/auth/logout` revokes this phone's session only. The device key is kept, so the next sign-in re-associates the same device. |
 
 ---
@@ -152,9 +152,9 @@ The fingerprint is the hex SHA-256 of the SPKI, shown grouped in blocks of four.
 
 ## 5. Native bridge
 
-`NativeCore` (Dart) talks to `MainActivity.kt` over `MethodChannel('prw/core')`; output and lifecycle events arrive on `EventChannel('prw/core/events')`.
+`NativeCore` (Dart) talks to `MainActivity.kt` over `MethodChannel('connrelay/core')`; output and lifecycle events arrive on `EventChannel('connrelay/core/events')`.
 
-| Method | Go facade call (`dev.prw.core.mobile`) |
+| Method | Go facade call (`dev.connrelay.core.mobile`) |
 |---|---|
 | `publicKey`, `fingerprint`, `signPoP` | Keystore SPKI, `Mobile.fingerprint`, `Mobile.signPoP` |
 | `connect` | `Mobile.connect(api, accessToken, deviceId, hostId, pinnedFp, mode="auto", 30 s, key, events)`; returns the path (`direct`, `turn` or `wss_relay`) |
@@ -223,7 +223,7 @@ OSC filtering (clipboard, titles, links), configurable fonts and scrollback, and
 | Screen | What it does today |
 |---|---|
 | Sign-in | One Google button, a note that the phone gets its own hardware key and no access by default, and an inline error (including **account not allowed**) |
-| Computers | List with status, last seen and Connect; empty state explains `prw-agent pair`; error view with retry; pull to refresh; 30 s polling |
+| Computers | List with status, last seen and Connect; empty state explains `connrelay-agent pair`; error view with retry; pull to refresh; 30 s polling |
 | Add computer | QR scan (or typed code) → shows the computer name and fingerprint → "Give this phone terminal access" (on by default) → approve. A QR fingerprint that does not match the server's is a hard stop. |
 | Computer detail | Presence, last seen, key fingerprint, agent version, grant or revoke this phone's access, remove the computer |
 | Terminal | Connecting, session picker (open new or attach), attached, reconnecting, failed (retry), revoked |
@@ -251,7 +251,7 @@ The UI keeps separate signals for presence, permission, connection state, path a
 
 The target design keeps these for later phases:
 
-- **iOS**: Secure Enclave key and the `prw/core` channel in Swift, using the same Go facade built for iOS.
+- **iOS**: Secure Enclave key and the `connrelay/core` channel in Swift, using the same Go facade built for iOS.
 - **Connection**: app-lifecycle reconnect on resume, make-before-break on Wi-Fi ↔ cellular changes, several hosts connected at once, status reports from the phone (`PATCH /v1/connections/{id}`).
 - **Terminal**: byte-level OSC filter (OSC 52 opt-in, title limits, OSC 8 confirmation), bundled monospace font, scrollback divider on reconnect, mouse-mode toggle, F-key row.
 - **Screens**: sessions and activity tabs, trust introduction, diagnostics with a redacted export, theme and terminal settings, per-phone access management with expiry.

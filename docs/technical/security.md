@@ -2,7 +2,7 @@
 
 > **Status:** the authorization chain (§5), revocation (§6) and key handling (§4) are implemented for Linux hosts and Android. Controls that are not built yet are marked *planned*; production controls tied to the AWS deployment (Caddy, coturn, SSM, backups) are the target design. Items marked *proposed* have not been confirmed and may change.
 
-PRW lets a phone open a shell on a computer. A shell runs with the full privileges of the host user, so the whole design rests on one rule. **Nothing a phone sends reaches the shell unless the control plane authorized it, the host checked it independently, and both peers proved their device identities on the live transport.**
+ConnRelay lets a phone open a shell on a computer. A shell runs with the full privileges of the host user, so the whole design rests on one rule. **Nothing a phone sends reaches the shell unless the control plane authorized it, the host checked it independently, and both peers proved their device identities on the live transport.**
 
 Related documents: [Architecture overview](../architecture/overview.md), [Protocol](protocol.md), [Data model](data-model.md), [API](api.md).
 
@@ -15,7 +15,7 @@ Related documents: [Architecture overview](../architecture/overview.md), [Protoc
 | AS-01 | Host shell: the user's OS privileges, files and any credentials on disk | Critical |
 | AS-02 | Terminal input and output, including secrets that tools and coding agents print | Critical |
 | AS-03 | Phone device private key (Android Keystore; iOS Secure Enclave when the iOS build exists) | High |
-| AS-04 | Host device private key (`~/.config/prw/host_key.pem`) | High |
+| AS-04 | Host device private key (`~/.config/connrelay/host_key.pem`) | High |
 | AS-05 | Server signing keys (Ed25519) for access tokens, tickets, relay tokens and leases | Critical |
 | AS-06 | Refresh, access and agent tokens | High |
 | AS-07 | Pairing references, pairing codes and the pairing HMAC pepper | High (short-lived) |
@@ -38,14 +38,14 @@ Related documents: [Architecture overview](../architecture/overview.md), [Protoc
 | Malicious dependency or build | Gets code execution in the agent, app or server |
 | Malicious terminal output | A program or file content that emits escape sequences to the phone |
 
-PRW has a **single operator**, so there are no other account members. Multi-user accounts would need a new threat review.
+ConnRelay has a **single operator**, so there are no other account members. Multi-user accounts would need a new threat review.
 
 ## 3. Trust boundaries
 
 ```mermaid
 flowchart LR
   subgraph TB1["Phone"]
-    App["Flutter app + prwcore"]
+    App["Flutter app + connrelaycore"]
   end
   subgraph TB2["Untrusted networks"]
     Net((internet / LAN))
@@ -59,7 +59,7 @@ flowchart LR
     DB[(PostgreSQL)]
   end
   subgraph TB5["Host agent"]
-    Agent["prw-agent"]
+    Agent["connrelay-agent"]
   end
   subgraph TB6["Host OS user"]
     Shell["tmux / shell"]
@@ -79,15 +79,15 @@ The critical boundary is **agent → shell**. Every terminal operation crosses i
 | Key | Algorithm | Generated on | Stored at | Used for |
 |---|---|---|---|---|
 | Phone device key | ECDSA P-256 | Phone | Android Keystore (StrongBox when available, otherwise TEE). Not exportable. iOS Secure Enclave is *planned* with the iOS build. | Proof of possession at sign-in and refresh, and peer attestation |
-| Host device key | ECDSA P-256 | Host | `$XDG_CONFIG_HOME/prw/host_key.pem` (default `~/.config/prw/`), PKCS#8 PEM, mode 0600 in a 0700 directory, owned by the agent user. The agent refuses to load it if group or others can read it. TPM storage is *proposed* for later. | Pairing proof of possession, agent WSS authentication, and peer attestation |
-| Server signing keys | Ed25519 | Operator (`prw-control keygen`) | Files referenced by `PRW_ACCESS_SIGNING_KEY_FILE` and `PRW_TICKET_SIGNING_KEY_FILE`; in production, SSM Parameter Store mounted as files. Never in the database or image. | Access JWTs (access key); connection tickets, relay tokens and grant leases (ticket key) |
+| Host device key | ECDSA P-256 | Host | `$XDG_CONFIG_HOME/connrelay/host_key.pem` (default `~/.config/connrelay/`), PKCS#8 PEM, mode 0600 in a 0700 directory, owned by the agent user. The agent refuses to load it if group or others can read it. TPM storage is *proposed* for later. | Pairing proof of possession, agent WSS authentication, and peer attestation |
+| Server signing keys | Ed25519 | Operator (`connrelay-control keygen`) | Files referenced by `CONNRELAY_ACCESS_SIGNING_KEY_FILE` and `CONNRELAY_TICKET_SIGNING_KEY_FILE`; in production, SSM Parameter Store mounted as files. Never in the database or image. | Access JWTs (access key); connection tickets, relay tokens and grant leases (ticket key) |
 | Ephemeral transport certificates | ECDSA P-256 (DTLS/TLS) | Per connection | Memory only | WebRTC DTLS and the inner TLS 1.3 of the WSS relay |
 | TURN secret | HMAC-SHA1 shared secret (TURN REST) | Operator | SSM, shared by the control plane and coturn | Short-lived TURN credentials |
 | Pairing pepper | 256-bit HMAC key | Operator | SSM | Hashing pairing references, codes and wait tokens |
 
 Private device keys never leave the device. The database stores only public keys (SPKI), fingerprints and hashes. When a host enrolls, it pins the server's ticket-verification public keys (JWKS). Key rotation, with a statement signed by the previous key, is *planned*; until then rotating the ticket key means re-pairing hosts.
 
-**Account sign-in** uses **Google OIDC only**. The phone obtains an ID token through the platform Google Sign-In SDK, bound to a single-use server nonce. The server validates the ID token (`iss`, `aud`, signature, expiry, nonce) and then checks the Google subject against an allowlist (`PRW_ALLOWED_SUBJECTS`). There is no open sign-up. A denied sign-in is audited with a hash of the subject, and the server log records the subject itself so the operator can allowlist their own account.
+**Account sign-in** uses **Google OIDC only**. The phone obtains an ID token through the platform Google Sign-In SDK, bound to a single-use server nonce. The server validates the ID token (`iss`, `aud`, signature, expiry, nonce) and then checks the Google subject against an allowlist (`CONNRELAY_ALLOWED_SUBJECTS`). There is no open sign-up. A denied sign-in is audited with a hash of the subject, and the server log records the subject itself so the operator can allowlist their own account.
 
 **New phones.** Signing in with an allowlisted Google account enrolls the phone as a new device. No further approval is needed. A new phone starts with **no grants**: it can see the inventory but cannot open a terminal until the owner grants it access to a host. Every phone enrollment is audited and appears in the Activity feed.
 
@@ -179,7 +179,7 @@ Ratings: likelihood (L) and impact (I) on an H/M/L scale. C means critical.
 | Scenario | Impact | Containment | Recovery |
 |---|---|---|---|
 | **Stolen Google account** | The attacker can enroll a new phone, which starts with zero grants. They could then grant it access through the API. | A new device shows up in Activity. Revoke it, revoke other refresh families, change the Google password and enable 2-step verification. | Review the audit log for grants and connections. |
-| **Lost phone** | The attacker still needs the OS unlock, and the app lock if enabled. | Revoke the phone from another phone. A server-side break-glass command (`prw-admin device revoke`) is *planned*. | New tickets are denied at once and sessions detach within 30 s. Enroll the replacement phone. |
+| **Lost phone** | The attacker still needs the OS unlock, and the app lock if enabled. | Revoke the phone from another phone. A server-side break-glass command (`connrelay-admin device revoke`) is *planned*. | New tickets are denied at once and sessions detach within 30 s. Enroll the replacement phone. |
 | **Compromised host** | That host's shell and key are exposed. | Revoke the host. Phones then reject its key. | Rebuild the host, generate a new key and re-pair. Other hosts are unaffected. |
 | **Control plane down** | No new connections can be made. WSS-relayed and TURN-relayed sessions drop, while direct sessions continue. | None needed. Existing direct sessions run until the grant lease expires (≤ 10 min), then the agent closes them. tmux sessions keep running. | Restore the EC2 instance. Agents reconnect automatically. |
 | **Control plane compromised** | See TM-24. | Lock down the security groups and keep a disk snapshot. | Rebuild from IaC with pinned images. Rotate the signing keys, TURN secret and pairing pepper, and revoke all refresh families. Agents re-pin keys via a signed rotation statement, or re-pair if trust is lost. |
@@ -201,7 +201,7 @@ Ratings: likelihood (L) and impact (I) on an H/M/L scale. C means critical.
 | | The Google subject of a **denied** sign-in, so the operator can allowlist it. It identifies an account, not a credential; the audit record stores only a hash. |
 
 Enforcement:
-- Logging uses `slog` with JSON output and explicit attributes. The control plane's access log runs only at debug level (`PRW_LOG_LEVEL=debug`, which the dev stack sets) and omits query strings, which can carry cursors.
+- Logging uses `slog` with JSON output and explicit attributes. The control plane's access log runs only at debug level (`CONNRELAY_LOG_LEVEL=debug`, which the dev stack sets) and omits query strings, which can carry cursors.
 - A lint rule forbidding request-body logging is *planned*.
 - An end-to-end canary test that checks terminal content never reaches any log is *planned*.
 
@@ -242,7 +242,7 @@ Subscribe to coturn security advisories. Patch critical issues within 7 days (*p
 ## 13. Residual risks
 
 - A compromised, authenticated phone can do anything its grants allow.
-- The relay, TURN and the control plane can observe metadata: who connects, when, how much data, and from which IPs. PRW is **not** zero-knowledge.
+- The relay, TURN and the control plane can observe metadata: who connects, when, how much data, and from which IPs. ConnRelay is **not** zero-knowledge.
 - A compromised control plane can enroll and grant a new attacker phone, unless host-side grant confirmation (*proposed*) is adopted.
 - The shell runs with the user's full privileges. Commands are not sandboxed.
 - Whatever a coding agent prints is shown on the phone.

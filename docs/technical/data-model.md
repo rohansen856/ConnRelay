@@ -2,7 +2,7 @@
 
 > **Status:** implemented. The schema lives in goose migrations under `services/control/migrations/` (`00001_init.sql` to `00003_attempt_nonce.sql`), embedded in the binary and applied at startup. Some tables exist ahead of the features that will use them; they are marked *unused* below.
 
-PRW keeps account, device, grant, connection and session **metadata** in PostgreSQL 16 or later. It never stores terminal input or output, command lines, environment variables, private keys, raw tokens, or permanent TURN credentials.
+ConnRelay keeps account, device, grant, connection and session **metadata** in PostgreSQL 16 or later. It never stores terminal input or output, command lines, environment variables, private keys, raw tokens, or permanent TURN credentials.
 
 Related: [Security model](security.md), [API reference](api.md).
 
@@ -44,7 +44,7 @@ erDiagram
 
 | Table | Purpose | Key constraints |
 |---|---|---|
-| `accounts` | One row per operator identity. | `UNIQUE (identity_provider, identity_subject)`. Provider is limited to `google`. The allowlist lives in configuration (`PRW_ALLOWED_SUBJECTS`), not in the database. |
+| `accounts` | One row per operator identity. | `UNIQUE (identity_provider, identity_subject)`. Provider is limited to `google`. The allowlist lives in configuration (`CONNRELAY_ALLOWED_SUBJECTS`), not in the database. |
 | `devices` | Phones and hosts. | `kind` is `phone` or `host`. Platform is `android`, `ios` or `linux`. A P-256 SPKI public key with its fingerprint. A live fingerprint is unique per account among non-revoked devices. `admin_state` must be `revoked` exactly when `revoked_at` is set. `capabilities` JSONB holds only host-reported features (for example `tmux`) and is capped at 4 KiB. |
 | `device_credentials` | Public-key history for rotation and audit. A row is written for every enrolled device. | At most one `active` key per purpose. Composite FK to the device. |
 | `auth_sessions` | Refresh-token families, phones only. | `refresh_token_hash UNIQUE`. `rotated_from_id` chains rotations; presenting an already-rotated token is reuse and revokes the whole family. Composite FK, kind fixed to `phone`. |
@@ -227,7 +227,7 @@ CREATE TABLE terminal_sessions (
   host_kind                  TEXT GENERATED ALWAYS AS ('host') STORED,
   created_by_phone_device_id UUID,
   phone_kind                 TEXT GENERATED ALWAYS AS ('phone') STORED,
-  host_session_handle        TEXT NOT NULL CHECK (length(host_session_handle) <= 128),  -- e.g. prw-<uuid>
+  host_session_handle        TEXT NOT NULL CHECK (length(host_session_handle) <= 128),  -- e.g. connrelay-<uuid>
   client_request_id          UUID NOT NULL,
   backend                    TEXT NOT NULL CHECK (backend IN ('tmux','pty')),
   persistent                 BOOLEAN NOT NULL,
@@ -417,11 +417,11 @@ The dev stack and tests use a single database user that owns the schema and runs
 
 | Role | Rights |
 |---|---|
-| `prw_owner` | Owns the schema. Used only by the migration job. |
-| `prw_app` | Read and write data. No DDL, no `TRUNCATE`. `DELETE` only on tables managed by the retention job. No `UPDATE` on `audit_events`. |
-| `prw_backup` | `pg_read_all_data`, for `pg_dump`. |
+| `connrelay_owner` | Owns the schema. Used only by the migration job. |
+| `connrelay_app` | Read and write data. No DDL, no `TRUNCATE`. `DELETE` only on tables managed by the retention job. No `UPDATE` on `audit_events`. |
+| `connrelay_backup` | `pg_read_all_data`, for `pg_dump`. |
 
-Row-level security is **deferred**. With a single operator account, tenant isolation comes from three things: account-scoped queries (the account ID always comes from the auth context), composite foreign keys, and a two-account isolation test suite. RLS becomes mandatory if PRW ever becomes multi-user.
+Row-level security is **deferred**. With a single operator account, tenant isolation comes from three things: account-scoped queries (the account ID always comes from the auth context), composite foreign keys, and a two-account isolation test suite. RLS becomes mandatory if ConnRelay ever becomes multi-user.
 
 ## 8. Retention (*planned*)
 
@@ -439,9 +439,9 @@ No retention jobs run yet. All values are *proposed*; the jobs will run inside t
 
 ## 9. Migrations
 
-- **Tooling:** [goose](https://github.com/pressly/goose) SQL migrations under `services/control/migrations/`, embedded with `go:embed` and applied by `prw-control serve` at startup. Queries are hand-written SQL on pgx v5 in `internal/store`; there is no ORM and sqlc was not adopted.
+- **Tooling:** [goose](https://github.com/pressly/goose) SQL migrations under `services/control/migrations/`, embedded with `go:embed` and applied by `connrelay-control serve` at startup. Queries are hand-written SQL on pgx v5 in `internal/store`; there is no ORM and sqlc was not adopted.
 - **Forward-only in production.** Changes use expand/contract: add a nullable column, backfill it, then enforce `NOT NULL` in a later release. Down sections exist only so CI can run up → down → up.
-- **Tests** run against a throwaway `postgres:16-alpine` container started by `internal/dbtest` (`PRW_REQUIRE_DB=1` turns a missing Docker into a failure instead of a skip, as CI does). They cover the migrations, composite-FK rejection (a cross-account grant and a wrong-kind grant must both fail at the database) and every store and API path.
+- **Tests** run against a throwaway `postgres:16-alpine` container started by `internal/dbtest` (`CONNRELAY_REQUIRE_DB=1` turns a missing Docker into a failure instead of a skip, as CI does). They cover the migrations, composite-FK rejection (a cross-account grant and a wrong-kind grant must both fail at the database) and every store and API path.
 - **Concurrent migrators** are not locked out: the provider runs without goose's session locker, which is safe while a single control-plane instance migrates at startup. Enabling the advisory lock is *planned* before running more than one instance.
 - **Startup check:** migrations run before the server listens, so `/health/ready` only has to check that the database answers.
 

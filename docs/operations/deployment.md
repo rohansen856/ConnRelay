@@ -2,7 +2,7 @@
 
 **Status:** Draft v1 for the private-beta deployment. The AWS deployment is **not built yet**: the Terraform, Compose, Caddy and coturn files described here are drafts, and only `deploy/dev/` (the [local development stack](#local-development-stack)) exists. All values here are placeholders until they are validated in staging.
 
-PRW runs on **one EC2 instance with two Elastic IPs**:
+ConnRelay runs on **one EC2 instance with two Elastic IPs**:
 
 | Public IP | Hostname (placeholder) | Serves |
 |---|---|---|
@@ -24,21 +24,21 @@ deploy/dev/devstack.sh down    # stop it; the database volume is kept
 
 | Piece | Details |
 |---|---|
-| PostgreSQL | Docker container `prw-dev-db` (`postgres:16-alpine`) on `127.0.0.1:55432`, data in the volume `prw-dev-pg`. Migrations run when the control plane starts. |
-| Control plane | Built from source and run as `prw-control serve` on `127.0.0.1:18080`, restarted on every `up` so allowlist changes apply. Runs with `PRW_LOG_LEVEL=debug` (override with the environment variable), which adds an access log line per request: method, path, status, duration and request ID, never query strings. |
+| PostgreSQL | Docker container `connrelay-dev-db` (`postgres:16-alpine`) on `127.0.0.1:55432`, data in the volume `connrelay-dev-pg`. Migrations run when the control plane starts. |
+| Control plane | Built from source and run as `connrelay-control serve` on `127.0.0.1:18080`, restarted on every `up` so allowlist changes apply. Runs with `CONNRELAY_LOG_LEVEL=debug` (override with the environment variable), which adds an access log line per request: method, path, status, duration and request ID, never query strings. |
 | Public URL | A Cloudflare quick tunnel (`cloudflared`, run with an empty config so `~/.cloudflared/config.yml` is never used) over `--protocol http2`, because QUIC to the edge keeps timing out on UDP-hostile networks. The `https://….trycloudflare.com` URL changes whenever the tunnel restarts. |
 | TURN | None. Connections use direct ICE (public STUN) or the WSS relay. |
-| State | `~/.local/share/prw-dev` (override with `PRW_DEV_HOME`): generated keys in `secrets/`, the database password, `public_url`, `control.log`, `tunnel.log` and pid files. Nothing is written to the repository. |
+| State | `~/.local/share/connrelay-dev` (override with `CONNRELAY_DEV_HOME`): generated keys in `secrets/`, the database password, `public_url`, `control.log`, `tunnel.log` and pid files. Nothing is written to the repository. |
 | Google client IDs | Read from `./.env` (`GOOGLE_WEB_CLIENT_ID`, gitignored). The Web client ID is the accepted ID-token audience. |
 
-**Allowlist.** `~/.local/share/prw-dev/allowed_subjects` holds one `google:<sub>` per line. While it is empty the server starts with a placeholder subject and denies everyone. Sign in once from the phone: the denial is logged in `control.log` with the subject to add (`sign-in denied: subject not in PRW_ALLOWED_SUBJECTS`). Add that line and run `up` again.
+**Allowlist.** `~/.local/share/connrelay-dev/allowed_subjects` holds one `google:<sub>` per line. While it is empty the server starts with a placeholder subject and denies everyone. Sign in once from the phone: the denial is logged in `control.log` with the subject to add (`sign-in denied: subject not in CONNRELAY_ALLOWED_SUBJECTS`). Add that line and run `up` again.
 
 **Host agent.**
 
 ```sh
-go build -o ~/.local/bin/prw-agent ./agents/host/cmd/prw-agent
-prw-agent pair --server "$(cat ~/.local/share/prw-dev/public_url)"
-prw-agent run
+go build -o ~/.local/bin/connrelay-agent ./agents/host/cmd/connrelay-agent
+connrelay-agent pair --server "$(cat ~/.local/share/connrelay-dev/public_url)"
+connrelay-agent run
 ```
 
 The agent stores the server URL at pairing time, so a new tunnel URL means pairing again.
@@ -49,8 +49,8 @@ The agent stores the server URL at pairing time, so a new tunnel URL means pairi
 apps/mobile/gocore/build-aar.sh            # gomobile AAR of the shared core
 cd apps/mobile
 flutter build apk --release --build-number=<higher than the installed build> \
-  --dart-define=PRW_API="$(cat ~/.local/share/prw-dev/public_url)" \
-  --dart-define=PRW_GOOGLE_SERVER_CLIENT_ID=<web client id>
+  --dart-define=CONNRELAY_API="$(cat ~/.local/share/connrelay-dev/public_url)" \
+  --dart-define=CONNRELAY_GOOGLE_SERVER_CLIENT_ID=<web client id>
 adb install -r build/app/outputs/flutter-apk/app-release.apk
 ```
 
@@ -84,7 +84,7 @@ flowchart LR
       subgraph IPB["Secondary private IP ⇄ EIP-B"]
         Coturn["coturn ≥ 4.18<br/>3478 udp/tcp · TLS 443 + 5349<br/>relay udp 49160–49359"]
       end
-      Control["prw-control :8080 (loopback)<br/>REST · WSS control/signaling/relay"]
+      Control["connrelay-control :8080 (loopback)<br/>REST · WSS control/signaling/relay"]
       PG[("PostgreSQL 16<br/>internal network only")]
       Mon["Prometheus · Alertmanager · Grafana<br/>(loopback only)"]
       Caddy --> Control --> PG
@@ -105,7 +105,7 @@ flowchart LR
 | Component | Placement | Notes |
 |---|---|---|
 | `caddy` | Host network, bound to the primary private IP | Terminates TLS for `api` and proxies to `127.0.0.1:8080` |
-| `prw-control` | Container on loopback ports 8080 (API) and 9090 (metrics) | One Go binary: REST, WSS control, WSS signaling, WSS relay, outbox and retention jobs |
+| `connrelay-control` | Container on loopback ports 8080 (API) and 9090 (metrics) | One Go binary: REST, WSS control, WSS signaling, WSS relay, outbox and retention jobs |
 | `postgres` | Container on the internal Docker network | Never published on a host port |
 | `coturn` | Host network, bound to the secondary private IP only | Host networking is needed for the relay port range |
 | Monitoring | Containers on loopback | Reached through an SSM port-forward |
@@ -118,8 +118,8 @@ flowchart LR
 |---|---|
 | AMI | Ubuntu 24.04 LTS (pinned AMI ID in Terraform) |
 | Instance type | Chosen from the load test; the candidate is 2 vCPU / 4 GiB. Baseline network must be ≥ 0.5 Gbit/s. |
-| Root volume | gp3, encrypted with KMS key `alias/prw-ebs` |
-| Data volume | Separate 20 GiB encrypted gp3 volume mounted at `/var/lib/prw`, holding Postgres data and coturn TLS |
+| Root volume | gp3, encrypted with KMS key `alias/connrelay-ebs` |
+| Data volume | Separate 20 GiB encrypted gp3 volume mounted at `/var/lib/connrelay`, holding Postgres data and coturn TLS |
 | Metadata | IMDSv2 required, hop limit 1 |
 | Admin access | SSM Session Manager only. **No SSH port is open.** |
 | Patching | `unattended-upgrades`, security updates only. Reboot window Sunday 04:00 UTC. |
@@ -179,7 +179,7 @@ Outbound traffic:
 | Endpoint | Certificate source | TLS policy |
 |---|---|---|
 | `api` (EIP-A:443) | Caddy automatic ACME (Let's Encrypt) | TLS 1.2 and 1.3 with Caddy's modern defaults, HSTS, HTTP/2, WebSocket upgrade pass-through |
-| `turn` (EIP-B:443, 5349) | certbot standalone, bound to EIP-B:80 during renewal. A deploy hook copies the certificate to `/var/lib/prw/coturn-tls/` and restarts coturn. | ECDHE + AEAD ciphers only. TLS 1.0 and 1.1 disabled. Server-side DTLS disabled, because WebRTC DTLS runs end to end inside TURN. |
+| `turn` (EIP-B:443, 5349) | certbot standalone, bound to EIP-B:80 during renewal. A deploy hook copies the certificate to `/var/lib/connrelay/coturn-tls/` and restarts coturn. | ECDHE + AEAD ciphers only. TLS 1.0 and 1.1 disabled. Server-side DTLS disabled, because WebRTC DTLS runs end to end inside TURN. |
 | Peer-to-peer fallback | Ephemeral TLS 1.3 between the phone and host | Needs no CA or certificate management on the server |
 
 An alert fires when either certificate has fewer than 14 days left.
@@ -324,18 +324,18 @@ services:
     mem_limit: 256m
 
   control:
-    image: ghcr.io/example-invalid/prw-control@sha256:<digest>
+    image: ghcr.io/example-invalid/connrelay-control@sha256:<digest>
     user: "10001:10001"
     read_only: true
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
     ports: ["127.0.0.1:8080:8080", "127.0.0.1:9090:9090"]
-    env_file: /etc/prw/control.env            # non-secret config only
-    volumes: ["/run/prw-secrets:/run/secrets:ro"]
+    env_file: /etc/connrelay/control.env            # non-secret config only
+    volumes: ["/run/connrelay-secrets:/run/secrets:ro"]
     networks: [backend]
     depends_on: [postgres]
     healthcheck:
-      test: ["CMD", "/prw-control", "healthcheck"]   # planned subcommand; probe /health/ready until then
+      test: ["CMD", "/connrelay-control", "healthcheck"]   # planned subcommand; probe /health/ready until then
       interval: 15s
     restart: unless-stopped
     mem_limit: 768m
@@ -345,8 +345,8 @@ services:
     image: postgres:16-bookworm@sha256:<digest>
     networks: [backend]
     volumes:
-      - /var/lib/prw/pgdata:/var/lib/postgresql/data
-      - /run/prw-secrets/pg_password:/run/secrets/pg_password:ro
+      - /var/lib/connrelay/pgdata:/var/lib/postgresql/data
+      - /run/connrelay-secrets/pg_password:/run/secrets/pg_password:ro
     environment:
       POSTGRES_PASSWORD_FILE: /run/secrets/pg_password
     shm_size: 256m
@@ -358,8 +358,8 @@ services:
     network_mode: host
     volumes:
       - ../coturn/turnserver.conf:/etc/coturn/turnserver.conf:ro
-      - /var/lib/prw/coturn-tls:/etc/coturn/tls:ro
-      - /run/prw-secrets/turn_shared_secret:/run/secrets/turn_shared_secret:ro
+      - /var/lib/connrelay/coturn-tls:/etc/coturn/tls:ro
+      - /run/connrelay-secrets/turn_shared_secret:/run/secrets/turn_shared_secret:ro
     restart: unless-stopped
     mem_limit: 512m
     cpus: 1.0
@@ -380,7 +380,7 @@ volumes:
 
 | Item | Setting |
 |---|---|
-| Roles | `prw_owner` runs migrations, `prw_app` is the runtime role, `prw_backup` runs dumps. Each has its own password from SSM. |
+| Roles | `connrelay_owner` runs migrations, `connrelay_app` is the runtime role, `connrelay_backup` runs dumps. Each has its own password from SSM. |
 | Authentication | `scram-sha-256`, accepted only from the backend Docker network |
 | Tuning | `shared_buffers` at 25% of the memory limit and `max_connections=50`. Slow queries over 250 ms are logged **without parameter values** (`log_parameter_max_length=0`). |
 | Migrations | goose, forward-only, following the expand/contract pattern. A `pg_dump` is taken before every migration. |
@@ -389,37 +389,37 @@ volumes:
 
 ## Configuration and secrets
 
-### Environment variables (`/etc/prw/control.env`, non-secret)
+### Environment variables (`/etc/connrelay/control.env`, non-secret)
 
 | Variable | Example | Purpose |
 |---|---|---|
-| `PRW_PUBLIC_BASE_URL` | `https://api.example.invalid` | Base URL used to build absolute URLs and WSS endpoints. Must be `https` unless `PRW_DEV_ALLOW_HTTP=1`. |
-| `PRW_LISTEN_ADDR` | `127.0.0.1:8080` | API listener (default `127.0.0.1:8080`) |
-| `PRW_DATABASE_URL_FILE` | `/run/secrets/database_url` | DSN for the `prw_app` role. `PRW_DATABASE_URL` is accepted for local use. |
-| `PRW_GOOGLE_CLIENT_IDS` | `<web-client-id>` | Accepted `aud` values for Google ID tokens (issuer fixed to `https://accounts.google.com`). The app requests ID tokens for the Web (server) client ID. |
-| `PRW_ALLOWED_SUBJECTS` | `google:<sub>` | Comma-separated allowlist of Google subjects; everyone else is denied. The server refuses to start with an empty list. |
-| `PRW_ACCESS_SIGNING_KEY_FILE` | `/run/secrets/access_signing_key.pem` | Ed25519 key for access tokens (`prw-control keygen <dir>` generates all keys) |
-| `PRW_TICKET_SIGNING_KEY_FILE` | `/run/secrets/ticket_signing_key.pem` | Ed25519 key for connection tickets, grant leases and relay tokens. Must differ from the access key. |
-| `PRW_PAIRING_HMAC_KEY_FILE` | `/run/secrets/pairing_hmac_key` | Pepper for hashing pairing refs and codes (≥ 32 bytes) |
-| `PRW_TURN_SHARED_SECRET_FILE` | `/run/secrets/turn_shared_secret` | Secret shared with coturn for TURN REST credentials (≥ 32 bytes) |
-| `PRW_TURN_URLS` | `turn:turn.example.invalid:3478?transport=udp,turn:turn.example.invalid:3478?transport=tcp,turns:turn.example.invalid:443?transport=tcp` | TURN servers sent to clients (required) |
-| `PRW_STUN_URLS` | `stun:turn.example.invalid:3478` | Optional STUN servers sent to clients |
-| `PRW_RELAY_MAX_BPS` | `2000000` | Per-attempt WSS relay rate cap, in **bits** per second (default 2 Mbit/s). The per-attempt volume cap is fixed at 2 GiB. |
-| `PRW_LOG_LEVEL` | `info` | `debug`, `info`, `warn` or `error`. `debug` adds a per-request access log. |
+| `CONNRELAY_PUBLIC_BASE_URL` | `https://api.example.invalid` | Base URL used to build absolute URLs and WSS endpoints. Must be `https` unless `CONNRELAY_DEV_ALLOW_HTTP=1`. |
+| `CONNRELAY_LISTEN_ADDR` | `127.0.0.1:8080` | API listener (default `127.0.0.1:8080`) |
+| `CONNRELAY_DATABASE_URL_FILE` | `/run/secrets/database_url` | DSN for the `connrelay_app` role. `CONNRELAY_DATABASE_URL` is accepted for local use. |
+| `CONNRELAY_GOOGLE_CLIENT_IDS` | `<web-client-id>` | Accepted `aud` values for Google ID tokens (issuer fixed to `https://accounts.google.com`). The app requests ID tokens for the Web (server) client ID. |
+| `CONNRELAY_ALLOWED_SUBJECTS` | `google:<sub>` | Comma-separated allowlist of Google subjects; everyone else is denied. The server refuses to start with an empty list. |
+| `CONNRELAY_ACCESS_SIGNING_KEY_FILE` | `/run/secrets/access_signing_key.pem` | Ed25519 key for access tokens (`connrelay-control keygen <dir>` generates all keys) |
+| `CONNRELAY_TICKET_SIGNING_KEY_FILE` | `/run/secrets/ticket_signing_key.pem` | Ed25519 key for connection tickets, grant leases and relay tokens. Must differ from the access key. |
+| `CONNRELAY_PAIRING_HMAC_KEY_FILE` | `/run/secrets/pairing_hmac_key` | Pepper for hashing pairing refs and codes (≥ 32 bytes) |
+| `CONNRELAY_TURN_SHARED_SECRET_FILE` | `/run/secrets/turn_shared_secret` | Secret shared with coturn for TURN REST credentials (≥ 32 bytes) |
+| `CONNRELAY_TURN_URLS` | `turn:turn.example.invalid:3478?transport=udp,turn:turn.example.invalid:3478?transport=tcp,turns:turn.example.invalid:443?transport=tcp` | TURN servers sent to clients (required) |
+| `CONNRELAY_STUN_URLS` | `stun:turn.example.invalid:3478` | Optional STUN servers sent to clients |
+| `CONNRELAY_RELAY_MAX_BPS` | `2000000` | Per-attempt WSS relay rate cap, in **bits** per second (default 2 Mbit/s). The per-attempt volume cap is fixed at 2 GiB. |
+| `CONNRELAY_LOG_LEVEL` | `info` | `debug`, `info`, `warn` or `error`. `debug` adds a per-request access log. |
 
-`prw-control check-config` validates the environment without starting the server. A separate metrics listener, a configurable TURN realm and a relay splice limit are planned but not implemented.
+`connrelay-control check-config` validates the environment without starting the server. A separate metrics listener, a configurable TURN realm and a relay splice limit are planned but not implemented.
 
 ### Secrets (SSM Parameter Store, SecureString)
 
 | Parameter (placeholder path) | Rendered to | Used by |
 |---|---|---|
-| `/prw/prod/access_signing_key` | `/run/prw-secrets/access_signing_key` | control |
-| `/prw/prod/ticket_signing_key` | `/run/prw-secrets/ticket_signing_key` | control |
-| `/prw/prod/pairing_hmac_key` | `/run/prw-secrets/pairing_hmac_key` | control |
-| `/prw/prod/turn_shared_secret` | `/run/prw-secrets/turn_shared_secret` | control, coturn |
-| `/prw/prod/pg/owner`, `/app`, `/backup` | `/run/prw-secrets/pg_*`, `database_url` | postgres, control, backup job |
+| `/connrelay/prod/access_signing_key` | `/run/connrelay-secrets/access_signing_key` | control |
+| `/connrelay/prod/ticket_signing_key` | `/run/connrelay-secrets/ticket_signing_key` | control |
+| `/connrelay/prod/pairing_hmac_key` | `/run/connrelay-secrets/pairing_hmac_key` | control |
+| `/connrelay/prod/turn_shared_secret` | `/run/connrelay-secrets/turn_shared_secret` | control, coturn |
+| `/connrelay/prod/pg/owner`, `/app`, `/backup` | `/run/connrelay-secrets/pg_*`, `database_url` | postgres, control, backup job |
 
-A systemd oneshot, `prw-secrets.service`, runs at boot and before every deploy. It calls `aws ssm get-parameters-by-path --with-decryption` using the instance role and writes the values to **tmpfs** under `/run/prw-secrets`, with mode `0400` and owned by the consuming UID.
+A systemd oneshot, `connrelay-secrets.service`, runs at boot and before every deploy. It calls `aws ssm get-parameters-by-path --with-decryption` using the instance role and writes the values to **tmpfs** under `/run/connrelay-secrets`, with mode `0400` and owned by the consuming UID.
 
 Secrets never appear in:
 - Git
@@ -431,7 +431,7 @@ Secrets never appear in:
 
 | Principal | Permissions |
 |---|---|
-| Instance role `prw-instance` | `ssm:GetParameter*` on `/prw/prod/*`, `kms:Decrypt` on the SSM and backup keys, `s3:PutObject` on the backup prefix, and `AmazonSSMManagedInstanceCore` |
+| Instance role `connrelay-instance` | `ssm:GetParameter*` on `/connrelay/prod/*`, `kms:Decrypt` on the SSM and backup keys, `s3:PutObject` on the backup prefix, and `AmazonSSMManagedInstanceCore` |
 | Operator role (human, MFA required) | Terraform apply, Session Manager, read access to backups for restores |
 | CI | No AWS permissions. Images are pushed to GHCR. |
 
@@ -483,7 +483,7 @@ CI runs `terraform fmt -check`, `terraform validate`, `tflint` and `checkov`. `a
 
 | Source | What is collected |
 |---|---|
-| `prw-control` `/metrics` | HTTP and WSS counters, connected devices, signaling latency, connection attempts by outcome and path (direct, TURN or WSS relay), relay bytes and splices, revocation propagation time, outbox backlog, rate-limit hits |
+| `connrelay-control` `/metrics` | HTTP and WSS counters, connected devices, signaling latency, connection attempts by outcome and path (direct, TURN or WSS relay), relay bytes and splices, revocation propagation time, outbox backlog, rate-limit hits |
 | node-exporter | CPU, memory, disk, per-interface network |
 | postgres-exporter | Connections, transactions, locks, database size |
 | coturn | Allocations and bytes, taken from its metrics output or derived from logs |
@@ -512,7 +512,7 @@ Logs go to journald with 14-day retention. Terminal content is **never** logged.
 
 | Backup | Schedule | Destination | Retention |
 |---|---|---|---|
-| `pg_dump -Fc` as `prw_backup` | Nightly at 03:00 UTC **and before every migration** | `s3://prw-backups-example-invalid/pg/YYYY/MM/DD/`, SSE-KMS, versioning, Object Lock in governance mode | 30 days |
+| `pg_dump -Fc` as `connrelay_backup` | Nightly at 03:00 UTC **and before every migration** | `s3://connrelay-backups-example-invalid/pg/YYYY/MM/DD/`, SSE-KMS, versioning, Object Lock in governance mode | 30 days |
 | EBS snapshots (root and data) | Daily (Data Lifecycle Manager) | Same region | 7 daily + 4 weekly |
 | Configuration | Git (`deploy/`) | — | — |
 | Secrets | SSM Parameter Store (versioned) | — | — |

@@ -28,7 +28,7 @@ Related: [Security model](security.md), [Data model](data-model.md).
 
 | Scheme | Used by | Description |
 |---|---|---|
-| `UserBearer` | Phone | `Authorization: Bearer <access JWT>`. EdDSA-signed, valid 10 minutes. Claims: `sub` (account), `did` (phone device), `sid` (auth session), `kid`, `aud=prw-api`. |
+| `UserBearer` | Phone | `Authorization: Bearer <access JWT>`. EdDSA-signed, valid 10 minutes. Claims: `sub` (account), `did` (phone device), `sid` (auth session), `kid`, `aud=connrelay-api`. |
 | `WaitToken` | Host during pairing | `Authorization: Bearer <wait_token>`, returned when a pairing challenge is created. |
 | `AgentSocket` | Host agent | Challenge/response on `/v1/agent/control` using the host device key. |
 | `None` | — | Unauthenticated. The sign-in and pairing-create endpoints are rate-limited per IP. |
@@ -131,7 +131,7 @@ The phone first gets a nonce from `/v1/auth/challenge`, then obtains a Google ID
   },
   "pop": {
     "nonce": "<from /v1/auth/challenge>",
-    "sig": "<ES256 JWS over JCS({purpose:'prw.auth.v1',nonce,spki_fp,iat})>"
+    "sig": "<ES256 JWS over JCS({purpose:'connrelay.auth.v1',nonce,spki_fp,iat})>"
   }
 }
 ```
@@ -151,8 +151,8 @@ Response `200`:
 
 **Validation, in order:**
 1. Shape: `provider` is `google`, `platform` is `android` or `ios`, the protocol range includes 1, `display_name` is NFC-normalized, contains no control characters and is 1–120 characters, and the SPKI is a P-256 key.
-2. ID token: `iss` is Google, `aud` is one of `PRW_GOOGLE_CLIENT_IDS`, the signature verifies against Google's JWKS, `exp` is valid, and `nonce` matches `oidc_nonce`.
-3. The Google `sub` is in `PRW_ALLOWED_SUBJECTS`. A denied sign-in is audited with a hash of the subject, and the server log records `google:<sub>` so the operator can add it to the allowlist.
+2. ID token: `iss` is Google, `aud` is one of `CONNRELAY_GOOGLE_CLIENT_IDS`, the signature verifies against Google's JWKS, `exp` is valid, and `nonce` matches `oidc_nonce`.
+3. The Google `sub` is in `CONNRELAY_ALLOWED_SUBJECTS`. A denied sign-in is audited with a hash of the subject, and the server log records `google:<sub>` so the operator can add it to the allowlist.
 4. The proof-of-possession nonce is unused.
 5. The JWS verifies with the presented key.
 
@@ -173,7 +173,7 @@ A newly enrolled phone needs no further approval. It starts with **no access gra
 ```json
 {"refresh_token": "…",
  "pop": {"nonce": "<from /v1/auth/challenge>",
-         "sig": "<ES256 JWS over JCS({purpose:'prw.refresh.v1',nonce,device_id,iat})>"}}
+         "sig": "<ES256 JWS over JCS({purpose:'connrelay.refresh.v1',nonce,device_id,iat})>"}}
 ```
 
 The response has the same shape as the exchange response, without `account` and `device`.
@@ -294,7 +294,7 @@ Rate limit: 1 per 2 minutes per IP, burst 10.
 {"host_public_key_spki": "<b64url>", "hostname": "workstation",
  "os": {"id": "ubuntu", "version": "24.04"}, "agent_version": "0.1.0",
  "proto": {"min": 1, "max": 1},
- "pop_sig": "<ES256 JWS over JCS({purpose:'prw.pair.create.v1',spki_fp,iat})>"}
+ "pop_sig": "<ES256 JWS over JCS({purpose:'connrelay.pair.create.v1',spki_fp,iat})>"}
 ```
 
 Response `201`:
@@ -304,7 +304,7 @@ Response `201`:
  "display_code": "7KQ2-M9XT",
  "expires_at": "…(+5 min)",
  "wait_token": "<b64url 32 bytes>",
- "qr_payload": "prw://pair?v=1&ref=<ref>&fp=<host spki_fp>&api=https://api.example.invalid"}
+ "qr_payload": "connrelay://pair?v=1&ref=<ref>&fp=<host spki_fp>&api=https://api.example.invalid"}
 ```
 
 The display code is 8 Crockford base32 characters (40 bits). The server stores only HMACs of the pairing ref, the code and the wait token.
@@ -365,7 +365,7 @@ Returns `200 {"status": "canceled"}`. Callable by the phone or by the host (usin
 ### 5.6 `POST /v1/pairing/challenges/{id}/complete` (host)
 
 ```json
-{"sig": "<ES256 JWS over JCS({purpose:'prw.pair.complete.v1',challenge_id,nonce2,spki_fp,iat})>"}
+{"sig": "<ES256 JWS over JCS({purpose:'connrelay.pair.complete.v1',challenge_id,nonce2,spki_fp,iat})>"}
 ```
 
 Response `200`:
@@ -448,7 +448,7 @@ Response `201`:
   "connection_attempt_id": "…",
   "status": "authorized",
   "expires_at": "…(+60 s)",
-  "ticket": "<EdDSA JWS, typ=prw-ticket+jwt>",
+  "ticket": "<EdDSA JWS, typ=connrelay-ticket+jwt>",
   "relay": {"url": "wss://api.example.invalid/v1/relay", "token": "<relay token, role=client, exp +90 s>"},
   "ice_servers": [
     {"urls": ["stun:turn.example.invalid:3478"]},
@@ -571,7 +571,7 @@ Items contain only allowlisted metadata. They never contain terminal content, to
 ### 10.1 `GET /v1/meta/compat`
 
 ```json
-{"protocol": {"min": 1, "max": 1}, "server": "prw-control"}
+{"protocol": {"min": 1, "max": 1}, "server": "connrelay-control"}
 ```
 
 Minimum app and agent versions are *planned*.
@@ -590,14 +590,14 @@ The readiness response never includes errors or connection strings.
 ## 11. WebSocket endpoints
 
 Rules shared by the WebSocket endpoints:
-- Subprotocol `prw.v1` on `/v1/agent/control` and `/v1/signaling`.
+- Subprotocol `connrelay.v1` on `/v1/agent/control` and `/v1/signaling`.
 - Those two endpoints reject any request with an `Origin` header, so browsers cannot drive them.
 - Frames are at most 64 KiB.
 - The server derives the sender's identity from the authenticated socket and overwrites any `from_device_id` the client sends.
 
 | Endpoint | Client | Authentication | Client → server | Server → client |
 |---|---|---|---|---|
-| `/v1/agent/control` | Host agent | The server sends `auth.challenge{nonce, exp}`. The agent replies `auth.response` with `payload: {device_id, sig, agent_version}`, where `sig` is an ES256 JWS over `{purpose:'prw.agent.v1',nonce,device_id,iat}`. The server answers `auth.ok{device_id, account_id, jwks}` and then a `grant.lease`. A failed login gets `auth.error{code}` and close `4401` (`4403` for a revoked host). A newer login for the same host closes the older socket with `4400`. | `heartbeat` every 25 s (`payload: {agent_version, capabilities: {tmux, peers}}`), answered with `heartbeat.ack`; `attempt.status` (including `ended` when a connected session closes); signaling for its own attempts | **Allowlist only:** `auth.*`, `heartbeat.ack`, `attempt.incoming`, `attempt.cancel`, `grant.lease` (signed, 10 min, renewed every 3 min), `revoke_notice`, relayed `signal`. `jwks.update`, `pairing.approved` and `server.notice` are allowlisted but not sent yet. |
+| `/v1/agent/control` | Host agent | The server sends `auth.challenge{nonce, exp}`. The agent replies `auth.response` with `payload: {device_id, sig, agent_version}`, where `sig` is an ES256 JWS over `{purpose:'connrelay.agent.v1',nonce,device_id,iat}`. The server answers `auth.ok{device_id, account_id, jwks}` and then a `grant.lease`. A failed login gets `auth.error{code}` and close `4401` (`4403` for a revoked host). A newer login for the same host closes the older socket with `4400`. | `heartbeat` every 25 s (`payload: {agent_version, capabilities: {tmux, peers}}`), answered with `heartbeat.ack`; `attempt.status` (including `ended` when a connected session closes); signaling for its own attempts | **Allowlist only:** `auth.*`, `heartbeat.ack`, `attempt.incoming`, `attempt.cancel`, `grant.lease` (signed, 10 min, renewed every 3 min), `revoke_notice`, relayed `signal`. `jwks.update`, `pairing.approved` and `server.notice` are allowlisted but not sent yet. |
 | `/v1/signaling` | Phone | First frame `{"type":"auth","payload":{"access_token":"…"}}`, answered with `auth.ok` | `signal` with `kind` `offer`, `ice_candidate`, `ice_complete`, `tls_fingerprint` or `attempt_cancel` | `signal` (`answer`, `ice_candidate`, `ice_complete`, `tls_fingerprint`, `attempt_cancel`), `attempt_status`, `revoke_notice` |
 | `/v1/relay` | Phone and host | First text frame `{"type":"join","attempt_id":"…","relay_token":"…","role":"client\|server"}`. The relay token is an EdDSA JWS with claims `{att, role, dev, exp: +90 s, jti}`; its `jti` is single-use. | After `{"type":"joined"}`: **opaque binary frames only** (the inner TLS 1.3 stream) | `joined`, then close codes |
 
@@ -613,7 +613,7 @@ Every WebSocket text message is one JSON object. Routing fields sit at the top l
 {"type": "signal", "attempt_id": "…", "kind": "offer", "from_device_id": "…", "payload": {"sdp": "…"}}
 {"type": "auth.response", "payload": {"device_id": "…", "sig": "…", "agent_version": "0.1.0"}}
 {"type": "attempt.status", "attempt_id": "…", "payload": {"status": "connected_direct", "path_type": "direct"}}
-{"type": "grant.lease", "lease": "<EdDSA JWS, typ prw-lease+jwt>"}
+{"type": "grant.lease", "lease": "<EdDSA JWS, typ connrelay-lease+jwt>"}
 ```
 
 - **Signaling** uses `type: "signal"` with `kind` set to `offer`, `answer`, `ice_candidate`, `ice_complete`, `tls_fingerprint` or `attempt_cancel`. The server sets `from_device_id` from the socket.
@@ -625,7 +625,7 @@ Every WebSocket text message is one JSON object. Routing fields sit at the top l
 | Scope | Limit |
 |---|---|
 | Signaling | 100 messages and 50 ICE candidates per attempt. Exceeding a limit closes the socket with 4429 `signaling_limit`. A per-socket messages-per-second limit is *planned*. |
-| Relay | The second peer must join within 15 s. Other limits: 120 s idle timeout, 64 KiB per message, `PRW_RELAY_MAX_BPS` (default 2 Mbit/s) and 2 GiB per attempt. Per-account and global splice caps (`relay_unavailable`) are *planned*. |
+| Relay | The second peer must join within 15 s. Other limits: 120 s idle timeout, 64 KiB per message, `CONNRELAY_RELAY_MAX_BPS` (default 2 Mbit/s) and 2 GiB per attempt. Per-account and global splice caps (`relay_unavailable`) are *planned*. |
 
 ### Close codes
 
@@ -690,5 +690,5 @@ Every WebSocket text message is one JSON object. Routing fields sit at the top l
 |---|---|---|
 | REST | URL prefix `/v1`; fields are only ever added | A breaking change goes to `/v2`. `/v1` stays available for at least one app release cycle. |
 | WebSocket and data channel | Integer `protocol_version` in hello messages and in the attestation | The server supports protocol versions N and N−1 for both app and agent. |
-| Minimum versions | `/v1/meta/compat` and 426 errors | The app prompts the user to update. The agent logs the problem and `prw-agent doctor` reports it. |
+| Minimum versions | `/v1/meta/compat` and 426 errors | The app prompts the user to update. The agent logs the problem and `connrelay-agent doctor` reports it. |
 | Contracts | Golden frame vectors in `protocol/vectors/`; OpenAPI 3.1 and JSON Schemas are *planned* | CI runs the Go tests against the vectors. |

@@ -2,7 +2,7 @@
 
 > **Status:** implemented for Linux hosts and Android, and run end to end on a real phone against the [local dev stack](../operations/deployment.md#local-development-stack). iOS, the AWS deployment (Caddy, coturn, Terraform) and the observability stack are not built yet; the sections that describe them are the target design. Values marked *proposed* are current defaults that may still be tuned.
 
-Private Remote Workspace (PRW) gives one operator secure terminal access from any number of their phones to any number of their Linux computers. It does not need a VPN product, a public SSH port or a third-party relay. All of the infrastructure is self-hosted.
+ConnRelay gives one operator secure terminal access from any number of their phones to any number of their Linux computers. It does not need a VPN product, a public SSH port or a third-party relay. All of the infrastructure is self-hosted.
 
 ## 1. Goals and non-goals
 
@@ -30,9 +30,9 @@ Private Remote Workspace (PRW) gives one operator secure terminal access from an
 | Component | Technology | Runs on | Responsibility |
 |---|---|---|---|
 | **Phone app** | Flutter (Android + iOS), Riverpod, go_router, xterm.dart | Phone | Sign-in, device and grant management, pairing approval, terminal UI, connection state |
-| **prwcore** | Go module, linked into the app via gomobile (`prwcore/mobile`), used directly by the agent | Phone and host | Transports (WebRTC, WSS relay), framing, flow control, identity attestation, connection manager |
+| **connrelaycore** | Go module, linked into the app via gomobile (`connrelaycore/mobile`), used directly by the agent | Phone and host | Transports (WebRTC, WSS relay), framing, flow control, identity attestation, connection manager |
 | **Control plane** | Go single binary | EC2, behind Caddy | REST API, Google OIDC sign-in, devices, pairing, grants, connection tickets, TURN credentials, signaling, WSS relay splice, outbox, audit |
-| **Host agent** (`prw-agent`) | Go, `systemd --user` service | Linux PC, as the user (never root) | Enrollment, outbound control channel, ticket/lease enforcement, session manager (tmux) |
+| **Host agent** (`connrelay-agent`) | Go, `systemd --user` service | Linux PC, as the user (never root) | Enrollment, outbound control channel, ticket/lease enforcement, session manager (tmux) |
 | **PostgreSQL** | PostgreSQL 16+ | EC2 (Docker, private network) | Accounts, devices, grants, attempts, session metadata, audit, outbox |
 | **coturn** | coturn ≥ 4.18 | EC2, second Elastic IP | STUN/TURN relay for WebRTC (UDP, TCP, TLS on 443) |
 | **Caddy** | Caddy with ACME | EC2, first Elastic IP | TLS termination for REST and WebSockets on 443 |
@@ -44,7 +44,7 @@ Private Remote Workspace (PRW) gives one operator secure terminal access from an
 flowchart LR
   subgraph Phone["Phone (Android / iOS)"]
     UI["Flutter UI"]
-    CORE_P["prwcore<br/>transports · framing · attestation"]
+    CORE_P["connrelaycore<br/>transports · framing · attestation"]
     KS[("Keystore / Secure Enclave<br/>P-256 device key")]
     UI <--> CORE_P
     CORE_P -. "sign callback" .-> KS
@@ -65,7 +65,7 @@ flowchart LR
   end
 
   subgraph Host["Linux PC"]
-    AGENT["prw-agent<br/>prwcore · session manager"]
+    AGENT["connrelay-agent<br/>connrelaycore · session manager"]
     TMUX["tmux server<br/>(private socket)"]
     AGENT --> TMUX
   end
@@ -109,7 +109,7 @@ A compromised control plane can deny service and observe metadata. It cannot sil
 ```mermaid
 sequenceDiagram
   autonumber
-  participant H as prw-agent (host)
+  participant H as connrelay-agent (host)
   participant S as Control plane
   participant P as Phone app
   H->>H: generate P-256 device key (if absent)
@@ -190,7 +190,7 @@ stateDiagram-v2
 ```
 
 The **network connection lifetime is independent of the process lifetime**.
-- Each PRW session is a tmux session (`prw-<uuid>`) on a private socket. The agent's `systemd --user` unit uses `KillMode=process`, so restarting the agent never kills the tmux server. Disconnecting kills only the `tmux attach` client, and the shell keeps running.
+- Each ConnRelay session is a tmux session (`connrelay-<uuid>`) on a private socket. The agent's `systemd --user` unit uses `KillMode=process`, so restarting the agent never kills the tmux server. Disconnecting kills only the `tmux attach` client, and the shell keeps running.
 - Reattaching starts a new attach client, and tmux redraws the screen.
 - tmux is required. If it is missing, the agent still connects but terminal sessions are disabled. A plain-PTY fallback without persistence is planned, not built.
 - Sessions do not survive a host reboot. Reporting them as `host_rebooted` is planned; today they simply disappear from `terminal.list`.

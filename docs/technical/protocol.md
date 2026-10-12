@@ -1,6 +1,6 @@
 # Wire Protocol (version 1)
 
-> **Status:** version 1, implemented in `core/prwcore`, `services/control` and `agents/host`. Parts not built yet are marked *planned*. The protocol is not frozen: golden vectors exist for frames (`protocol/vectors/frames.json`) and the rest follow at freeze time. Values marked *proposed* are defaults that may be tuned.
+> **Status:** version 1, implemented in `core/connrelaycore`, `services/control` and `agents/host`. Parts not built yet are marked *planned*. The protocol is not frozen: golden vectors exist for frames (`protocol/vectors/frames.json`) and the rest follow at freeze time. Values marked *proposed* are defaults that may be tuned.
 
 Conventions:
 - "MUST", "SHOULD" and "MAY" follow RFC 2119.
@@ -30,7 +30,7 @@ Signed payloads are **JCS-canonical JSON** (RFC 8785). The signature covers the 
 
 ## 2. Phone sign-in and device registration
 
-Google OIDC is the only identity provider. The phone gets a server nonce, obtains a Google ID token bound to it through the platform Google Sign-In SDK (initialised with the server's web client ID), then exchanges the ID token for PRW tokens.
+Google OIDC is the only identity provider. The phone gets a server nonce, obtains a Google ID token bound to it through the platform Google Sign-In SDK (initialised with the server's web client ID), then exchanges the ID token for ConnRelay tokens.
 
 **`POST /v1/auth/challenge`** returns `{nonce, exp}`:
 - `nonce` is 32 random bytes, base64url-encoded.
@@ -53,14 +53,14 @@ Google OIDC is the only identity provider. The phone gets a server nonce, obtain
   },
   "pop": {
     "nonce": "<server nonce>",
-    "sig": "<ES256 JWS over JCS({purpose:'prw.auth.v1', nonce, spki_fp, iat})>"
+    "sig": "<ES256 JWS over JCS({purpose:'connrelay.auth.v1', nonce, spki_fp, iat})>"
   }
 }
 ```
 
 The server performs these checks in order:
-1. It validates the ID token: `iss`, `aud` (one of `PRW_GOOGLE_CLIENT_IDS`), signature against cached Google JWKS, `exp` and `nonce`. The email is stored only when `email_verified` is true.
-2. It checks that `sub` is listed in `PRW_ALLOWED_SUBJECTS`. If not, it returns `403 account_not_allowed`, audits a hash of the subject, and logs `google:<sub>` so the operator can add it.
+1. It validates the ID token: `iss`, `aud` (one of `CONNRELAY_GOOGLE_CLIENT_IDS`), signature against cached Google JWKS, `exp` and `nonce`. The email is stored only when `email_verified` is true.
+2. It checks that `sub` is listed in `CONNRELAY_ALLOWED_SUBJECTS`. If not, it returns `403 account_not_allowed`, audits a hash of the subject, and logs `google:<sub>` so the operator can add it.
 3. It confirms the server nonce has not been used.
 4. It verifies the proof-of-possession signature with the presented key.
 
@@ -73,7 +73,7 @@ In **one transaction**, the server then:
 A new phone needs no other approval. It starts with **no grants**.
 
 The response is `{access_token, access_expires_at, refresh_token, refresh_expires_at, device_id, account, device}`:
-- `access_token` is an EdDSA JWT valid for 10 minutes, with `kid` in its header. Its claims are `iss`, `aud` (`prw-api`), `sub` (account ID), `did` (device ID), `kind` (`phone`), `sid` (auth session), `iat`, `exp` and `jti`.
+- `access_token` is an EdDSA JWT valid for 10 minutes, with `kid` in its header. Its claims are `iss`, `aud` (`connrelay-api`), `sub` (account ID), `did` (device ID), `kind` (`phone`), `sid` (auth session), `iat`, `exp` and `jti`.
 - `refresh_token` is opaque. It has a 30-day sliding lifetime and a 90-day absolute lifetime.
 
 **`POST /v1/auth/refresh`** takes `{refresh_token, pop: {nonce, sig}}`. The signature MUST verify against the device's active key.
@@ -88,7 +88,7 @@ The response is `{access_token, access_expires_at, refresh_token, refresh_expire
 The handshake on `wss://api.example.invalid/v1/agent/control` runs as follows. The agent never puts credentials in the URL.
 
 1. Server → agent: `{"type":"auth.challenge","nonce":"…","exp":…}`
-2. Agent → server: `{"type":"auth.response","payload":{"device_id":"…","sig":"<ES256 JWS over JCS({purpose:'prw.agent.v1',nonce,device_id,iat})>","agent_version":"…"}}`
+2. Agent → server: `{"type":"auth.response","payload":{"device_id":"…","sig":"<ES256 JWS over JCS({purpose:'connrelay.agent.v1',nonce,device_id,iat})>","agent_version":"…"}}`
 3. The server consumes the nonce (single use, 1 min), verifies the signature against the host's key and checks that the host is active.
 4. On success, server → agent: `auth.ok {device_id, account_id, jwks}`, then `grant.lease` (§14).
 5. On failure, server → agent: `auth.error {code}`, after which the server closes the socket with `4401`, or `4403` for a revoked host. The agent stops for good on `4403`.
@@ -111,16 +111,16 @@ The agent sends the server:
 
 | Step | Message | Notes |
 |---|---|---|
-| 1 | Host → `POST /v1/pairing/challenges` `{host_public_key_spki, hostname, os:{id,version}, agent_version, proto, pop_sig}` | Unauthenticated. Rate-limited per IP (1 per 2 min, burst 10). `pop_sig` is an ES256 signature over `{purpose:'prw.pair.create.v1', spki_fp, iat}`. |
+| 1 | Host → `POST /v1/pairing/challenges` `{host_public_key_spki, hostname, os:{id,version}, agent_version, proto, pop_sig}` | Unauthenticated. Rate-limited per IP (1 per 2 min, burst 10). `pop_sig` is an ES256 signature over `{purpose:'connrelay.pair.create.v1', spki_fp, iat}`. |
 | 2 | Server → host `{challenge_id, pairing_ref, display_code, expires_at, wait_token, qr_payload}` | `pairing_ref` is 16 random bytes. `display_code` is 8 Crockford base32 characters (40 bits), shown as `XXXX-XXXX`. The server stores only HMACs of the ref, the normalized code and the wait token. The challenge expires after 5 min. |
-| 3 | Host displays a QR code | `qr_payload` is `prw://pair?v=1&ref=<ref>&fp=<spki_fp hex>&api=<server base URL>`. Alongside it, the host prints the code and the grouped key fingerprint. |
+| 3 | Host displays a QR code | `qr_payload` is `connrelay://pair?v=1&ref=<ref>&fp=<spki_fp hex>&api=<server base URL>`. Alongside it, the host prints the code and the grouped key fingerprint. |
 | 4 | Host → `GET /v1/pairing/challenges/{id}/wait` | A long poll (up to 25 s per request) authorized by `wait_token`. It returns `pending`, `approved` with `nonce2`, or an expiry, rejection or lock error. |
 | 5 | Phone → `POST /v1/pairing/resolve` `{pairing_ref}` or `{display_code}` | Signed in. A wrong ref or code returns 404 and cannot be tied to a challenge. A per-account rate limit is *planned*. |
 | 6 | Server → phone `{challenge_id, hostname, os, agent_version, host_key_fingerprint, expires_at, compat}` | |
 | 7 | Phone verification | For a scanned QR code, `fp` MUST equal `host_key_fingerprint`; otherwise the phone fails closed. For a typed code, the user confirms the fingerprint by eye. |
 | 8 | Phone → `POST /v1/pairing/challenges/{id}/approve` `{host_key_fingerprint, display_name?, grant_to_this_phone}` | The server compares the fingerprint again. A mismatch returns `pairing_fingerprint_mismatch` and counts as a failure; the fifth failure locks the challenge. On success the challenge becomes `approved`, is bound to the account and gets a fresh `nonce2`. |
 | 9 | Server → host | The pending `wait` long poll returns `{status: "approved", nonce2}`. (A `pairing.approved` push on the control socket is reserved but unused: an unpaired host has no control socket.) |
-| 10 | Host → `POST /v1/pairing/challenges/{id}/complete` `{sig}` | `sig` is an ES256 signature over `{purpose:'prw.pair.complete.v1', challenge_id, nonce:nonce2, spki_fp, iat}`. |
+| 10 | Host → `POST /v1/pairing/challenges/{id}/complete` `{sig}` | `sig` is an ES256 signature over `{purpose:'connrelay.pair.complete.v1', challenge_id, nonce:nonce2, spki_fp, iat}`. |
 | 11 | Server, in one transaction | Locks the row and verifies the wait token, status, expiry and signature. Creates the host device and its credential, marks the challenge consumed, creates the grant if `grant_to_this_phone` was set, and writes an audit record. |
 | 12 | Server → host `{device_id, account_id, jwks, control_ws_url}` | The host **pins** the server verification keys. |
 
@@ -159,7 +159,7 @@ The phone compares `host.key_fingerprint` with the fingerprint it pinned at pair
 
 The host receives `attempt.incoming` whose `payload` carries `attempt_id`, `phone_device_id`, the same ticket, a relay token with `role=server`, and its own ICE servers.
 
-**Ticket.** A JWS with `alg=EdDSA` and `typ=prw-ticket+jwt`.
+**Ticket.** A JWS with `alg=EdDSA` and `typ=connrelay-ticket+jwt`.
 
 | Claim | Meaning |
 |---|---|
@@ -262,8 +262,8 @@ The WebRTC transport uses two DataChannels. Both are reliable, ordered and negot
 
 | Channel | ID | Carries |
 |---|---|---|
-| `prw-ctl` | 0 | CONTROL frames |
-| `prw-term` | 1 | Terminal frames (INPUT, OUTPUT, CLOSE_STREAM) |
+| `connrelay-ctl` | 0 | CONTROL frames |
+| `connrelay-term` | 1 | Terminal frames (INPUT, OUTPUT, CLOSE_STREAM) |
 
 Each DataChannel message is exactly one frame (§12).
 
@@ -280,16 +280,16 @@ Each DataChannel message is exactly one frame (§12).
 | Wait for second peer | 15 s |
 | Idle timeout | 120 s |
 | Max message | 64 KiB |
-| Rate per attempt | `PRW_RELAY_MAX_BPS`, default 2 Mbit/s |
+| Rate per attempt | `CONNRELAY_RELAY_MAX_BPS`, default 2 Mbit/s |
 | Bytes per attempt | 2 GiB |
 | Concurrent relayed attempts per account | 16 (*planned*) |
 
 The server MUST NOT inspect or log the payload. It counts bytes only. Join failures close with `4400` (no join), `4401` (bad or reused relay token), `4408` (peer did not join in time) or `4409` (both roles already joined). Closing splices on revocation is *planned*; today the host closes the revoked phone's transport, which ends the splice.
 
 **Inner TLS.**
-1. Each peer generates an ephemeral P-256 key and a self-signed certificate (`CN=prw-<attempt>`, valid for 1 h).
+1. Each peer generates an ephemeral P-256 key and a self-signed certificate (`CN=connrelay-<attempt>`, valid for 1 h).
 2. Each peer sends `tls_fingerprint` (the SHA-256 of its DER certificate) over signaling before the handshake.
-3. TLS 1.3 then runs with the host as server and the phone as client. Client certificates are required and the ALPN is `prw/1`. Chain validation is replaced by a callback that compares the peer certificate's fingerprint with the value received over signaling.
+3. TLS 1.3 then runs with the host as server and the phone as client. Client certificates are required and the ALPN is `connrelay/1`. Chain validation is replaced by a callback that compares the peer certificate's fingerprint with the value received over signaling.
 4. Identity attestation (§10) then binds that certificate to the peer's long-term device key, so tampering with signaling is still detected.
 5. CONTROL and terminal frames are multiplexed by frame type over the TLS byte stream.
 
@@ -301,7 +301,7 @@ Both sides send `peer.attest {jws}` as their first CONTROL message after `hello`
 
 ```json
 {
-  "purpose": "prw.peer.attest.v1",
+  "purpose": "connrelay.peer.attest.v1",
   "pv": 1,
   "att": "<attempt_id>",
   "from": "<own device_id>",
@@ -407,7 +407,7 @@ Credit is counted in payload bytes, per stream and per direction.
 | App device-list refresh | every 30 s while the list is on screen |
 | Detached session idle reaping | none by default (optional `idle_kill_after`) |
 
-**Grant lease.** The server sends the agent `{"type":"grant.lease","lease":"<JWS>"}`. The lease is an EdDSA JWS with `typ=prw-lease+jwt`, signed with the ticket key, whose claims list the phones allowed on this host:
+**Grant lease.** The server sends the agent `{"type":"grant.lease","lease":"<JWS>"}`. The lease is an EdDSA JWS with `typ=connrelay-lease+jwt`, signed with the ticket key, whose claims list the phones allowed on this host:
 
 ```json
 {"host":"<host device id>","iat":…,"nbf":…,"exp":"<iat + 10 min>","jti":"…",
@@ -425,7 +425,7 @@ The server sends a fresh lease on login, every 3 minutes, and after every grant 
 2. **Delivery.** The outbox worker (woken on commit, polling every 500 ms) sends each affected host a fresh lease and `{"type":"revoke_notice","scope":"grant"|"device","dedupe_key","payload"}`, and sends the phone the same notice. A failed send to a connected agent is retried with backoff (1 s, doubling, capped at 60 s) and dead-lettered after 8 attempts with an error log; an agent that was offline gets a lease reflecting the change when it reconnects. Agent acknowledgements are *planned*.
 3. **Agent handling.** The agent removes the phone from its lease cache, sends `session.revoked {reason}` on each of that phone's transports and closes them.
 4. **Running sessions.** Affected tmux sessions are **detached, not killed**. The processes keep running, and the owner can reattach from another authorized phone or terminate them explicitly.
-5. **Revoked host or phone.** The server closes the revoked device's sockets with `4403` and refuses to re-authenticate a revoked host. The agent then closes every peer, exits and asks the user to run `prw-agent unpair --local` and pair again.
+5. **Revoked host or phone.** The server closes the revoked device's sockets with `4403` and refuses to re-authenticate a revoked host. The agent then closes every peer, exits and asks the user to run `connrelay-agent unpair --local` and pair again.
 6. **Missed push.** If the notice never reaches the host, the grant lease limits how long revoked access can last.
 
 ## 16. Reconnect algorithm
@@ -526,7 +526,7 @@ Error responses MUST NOT include tokens, pairing codes, terminal bytes or TURN s
 
 ## 20. Golden vectors
 
-`protocol/vectors/` holds JSON fixtures. Today it contains `frames.json` (frames of every type, edge lengths and invalid cases), checked by `core/prwcore/frame`. The rest of the list below is *planned* for the protocol freeze; since the phone runs the same Go core, a Dart implementation is no longer needed for the vectors.
+`protocol/vectors/` holds JSON fixtures. Today it contains `frames.json` (frames of every type, edge lengths and invalid cases), checked by `core/connrelaycore/frame`. The rest of the list below is *planned* for the protocol freeze; since the phone runs the same Go core, a Dart implementation is no longer needed for the vectors.
 
 - Frames of every type, with lengths 0, 1 and 16384, the FIN flag, and invalid cases.
 - Control envelopes, including unknown fields that receivers must ignore.

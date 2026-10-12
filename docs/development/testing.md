@@ -15,7 +15,7 @@
 | Command | What it runs | Needs |
 |---|---|---|
 | `make vet test-race` | Unit and integration tests for every Go module, including PTY/tmux tests, in-process WebRTC, TURN and relay tests, and the full-system test (`services/control/internal/e2e`) that drives the real agent through the gomobile facade | Go, tmux; Docker for the database tests |
-| `PRW_REQUIRE_DB=1 make test-race` | The same, but database tests **fail** instead of skipping when Docker or Postgres is unavailable. CI always sets it. | Go, tmux, Docker |
+| `CONNRELAY_REQUIRE_DB=1 make test-race` | The same, but database tests **fail** instead of skipping when Docker or Postgres is unavailable. CI always sets it. | Go, tmux, Docker |
 | `make mobile` | `flutter analyze` and `flutter test` for the phone app: API client, sign-in, pairing, device list (pull to refresh, polling), terminal, the xterm fork fixes, and the TUI replay when fixtures are recorded | Flutter |
 | `make ci` | `vet`, `test-race` and `mobile` | All of the above |
 | `make netlab` | Docker network lab: NAT types, TURN over UDP/TCP/TLS-443, HTTPS-proxy-only egress | Docker |
@@ -60,7 +60,7 @@ flowchart LR
   subgraph nat2["ns: nat-b<br/>nftables NAT"]
   end
   subgraph host_ns["ns: host"]
-    AG[prw-agent + tmux]
+    AG[connrelay-agent + tmux]
   end
   PC --- nat1 --- core_ns --- nat2 --- AG
 ```
@@ -87,7 +87,7 @@ flowchart LR
 | T-INT-018 | Relay and control plane observe only ciphertext. Canary bytes typed in the terminal never appear on the server side. |
 | T-INT-019 / 020 | A direct path carries no TURN bytes; a forced-relay path still works |
 | T-INT-027 | Drop the transport for 30 s, reconnect, and confirm the same tmux pane and PID |
-| T-INT-028 | `systemctl --user restart prw-agent`; the session survives and reattaches |
+| T-INT-028 | `systemctl --user restart connrelay-agent`; the session survives and reattaches |
 | T-INT-032 | Revoke during an active session; the peer closes within 30 s and the tmux session is detached, not killed |
 | T-INT-042 | Full pairing flow: create → resolve → approve → wait → complete |
 | T-INT-044 | Every API error code in the catalogue is reachable and well-formed |
@@ -173,7 +173,7 @@ Only networks that have been tested are claimed as supported. The tested-network
 
 ## CI pipeline stages
 
-**Implemented today** (`.github/workflows/ci.yml`): the `go` job (`make vet`, `PRW_REQUIRE_DB=1 make test-race`, govulncheck), the `mobile` job (`make mobile`), the `secrets` job (gitleaks over the full history) and the `netlab` job (manual dispatch only). The table below is the target pipeline.
+**Implemented today** (`.github/workflows/ci.yml`): the `go` job (`make vet`, `CONNRELAY_REQUIRE_DB=1 make test-race`, govulncheck), the `mobile` job (`make mobile`), the `secrets` job (gitleaks over the full history) and the `netlab` job (manual dispatch only). The table below is the target pipeline.
 
 | # | Stage | Contents | Blocking |
 |---|---|---|---|

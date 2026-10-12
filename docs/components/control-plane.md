@@ -1,7 +1,7 @@
 # Control Plane
 
 > **Status:** Implemented for V1 and running against real phones and hosts. Items still on the roadmap are marked **(planned)**; everything else describes the code as it is.
-> **Location:** `services/control/` · **Binary:** `prw-control`
+> **Location:** `services/control/` · **Binary:** `connrelay-control`
 
 The control plane is a single Go service. It handles:
 
@@ -21,8 +21,8 @@ The packages are split so that the relay could later run as its own process with
 
 ```text
 services/control/
-  cmd/prw-control/main.go     # subcommands: serve (default) | check-config | keygen DIR
-  cmd/prw-labserver/          # network-lab stand-in (no accounts); test networks only
+  cmd/connrelay-control/main.go     # subcommands: serve (default) | check-config | keygen DIR
+  cmd/connrelay-labserver/          # network-lab stand-in (no accounts); test networks only
   migrations/                 # goose SQL migrations 00001–00003, embedded into the binary
   internal/
     config/      env parsing + validation (reports every problem at once), secret-file loading
@@ -53,7 +53,7 @@ services/control/
 | WebSocket | `github.com/coder/websocket` | Maintained, context-aware |
 | Database | `pgx/v5` + `pgxpool`, `goose` (embedded) | Plain SQL, no ORM, forward-only migrations |
 | OIDC | `github.com/coreos/go-oidc/v3` | Standard Google ID-token verification with JWKS caching |
-| JWS / JWT | `github.com/go-jose/go-jose/v4` and the shared `prwcore/token` package | Vetted implementation; no hand-rolled JWS |
+| JWS / JWT | `github.com/go-jose/go-jose/v4` and the shared `connrelaycore/token` package | Vetted implementation; no hand-rolled JWS |
 | IDs | `github.com/google/uuid` (UUIDv7) | Time-ordered primary keys |
 | Rate limiting | `golang.org/x/time/rate` | Single instance, so in-memory is enough |
 | Logs | `log/slog` (JSON to stdout) | |
@@ -62,22 +62,22 @@ services/control/
 
 ## 2. Configuration
 
-Configuration comes from environment variables, and secrets are read from files that must not be readable by group or others (`chmod 600`). `prw-control check-config` validates everything and exits; `prw-control keygen DIR` writes fresh signing keys and secrets for a new install.
+Configuration comes from environment variables, and secrets are read from files that must not be readable by group or others (`chmod 600`). `connrelay-control check-config` validates everything and exits; `connrelay-control keygen DIR` writes fresh signing keys and secrets for a new install.
 
 | Variable | Default | Validation |
 |---|---|---|
-| `PRW_PUBLIC_BASE_URL` | — (required) | https, no path. `http://` only with `PRW_DEV_ALLOW_HTTP=1` (local tests). WSS URLs handed to clients are derived from it. |
-| `PRW_LISTEN_ADDR` | `127.0.0.1:8080` | Fronted by a TLS proxy |
-| `PRW_DATABASE_URL` / `PRW_DATABASE_URL_FILE` | — (required) | One of the two |
-| `PRW_GOOGLE_CLIENT_IDS` | — (required) | Comma list of accepted `aud` values (the Web client ID the app passes as `serverClientId`, plus any others) |
-| `PRW_ALLOWED_SUBJECTS` | — (required) | Comma list of `google:<sub>`. **If empty, the server refuses to start.** |
-| `PRW_ACCESS_SIGNING_KEY_FILE`, `PRW_TICKET_SIGNING_KEY_FILE` | — (required) | Ed25519 PKCS#8 PEM; the two keys must differ |
-| `PRW_PAIRING_HMAC_KEY_FILE` | — (required) | ≥ 32 bytes |
-| `PRW_TURN_SHARED_SECRET_FILE` | — (required) | ≥ 32 bytes |
-| `PRW_TURN_URLS` | — (required) | `turn:` / `turns:` URLs |
-| `PRW_STUN_URLS` | empty | `stun:` URLs |
-| `PRW_RELAY_MAX_BPS` | `2000000` | bits per second, ≥ 8000 |
-| `PRW_LOG_LEVEL` | `info` | `debug`, `info`, `warn` or `error` |
+| `CONNRELAY_PUBLIC_BASE_URL` | — (required) | https, no path. `http://` only with `CONNRELAY_DEV_ALLOW_HTTP=1` (local tests). WSS URLs handed to clients are derived from it. |
+| `CONNRELAY_LISTEN_ADDR` | `127.0.0.1:8080` | Fronted by a TLS proxy |
+| `CONNRELAY_DATABASE_URL` / `CONNRELAY_DATABASE_URL_FILE` | — (required) | One of the two |
+| `CONNRELAY_GOOGLE_CLIENT_IDS` | — (required) | Comma list of accepted `aud` values (the Web client ID the app passes as `serverClientId`, plus any others) |
+| `CONNRELAY_ALLOWED_SUBJECTS` | — (required) | Comma list of `google:<sub>`. **If empty, the server refuses to start.** |
+| `CONNRELAY_ACCESS_SIGNING_KEY_FILE`, `CONNRELAY_TICKET_SIGNING_KEY_FILE` | — (required) | Ed25519 PKCS#8 PEM; the two keys must differ |
+| `CONNRELAY_PAIRING_HMAC_KEY_FILE` | — (required) | ≥ 32 bytes |
+| `CONNRELAY_TURN_SHARED_SECRET_FILE` | — (required) | ≥ 32 bytes |
+| `CONNRELAY_TURN_URLS` | — (required) | `turn:` / `turns:` URLs |
+| `CONNRELAY_STUN_URLS` | empty | `stun:` URLs |
+| `CONNRELAY_RELAY_MAX_BPS` | `2000000` | bits per second, ≥ 8000 |
+| `CONNRELAY_LOG_LEVEL` | `info` | `debug`, `info`, `warn` or `error` |
 
 Token lifetimes and limits are code constants: access tokens 10 min, refresh 30 d sliding / 90 d absolute, tickets 60 s, relay tokens 90 s, leases 10 min (renewed every 3 min), pairing challenges 5 min, TURN credentials 10 min, relay byte cap 2 GiB per attempt. The ticket-key rotation, metrics address and further tunables in §4.3 and §6 are **(planned)**.
 
@@ -92,7 +92,7 @@ requestid → accesslog → recover → ratelimit(ip, unauthenticated POSTs) →
 | Middleware | Behaviour |
 |---|---|
 | `requestid` | Generates a request ID (`req_…`), echoes it as `X-Request-Id` and attaches it to log lines and audit rows. |
-| `accesslog` | At `PRW_LOG_LEVEL=debug` only: one `request` line with method, path, status, duration in ms and request ID. Query strings are never logged (they can carry cursors and codes); neither are headers or bodies. The wrapped writer supports `Unwrap`, so WebSocket upgrades pass through. |
+| `accesslog` | At `CONNRELAY_LOG_LEVEL=debug` only: one `request` line with method, path, status, duration in ms and request ID. Query strings are never logged (they can carry cursors and codes); neither are headers or bodies. The wrapped writer supports `Unwrap`, so WebSocket upgrades pass through. |
 | `recover` | A panic is logged with its path and answered with `internal_error`. |
 | `ratelimit(ip)` | Per-IP token buckets on `POST /v1/auth/challenge` (1 per 2 s), `POST /v1/auth/exchange` (1 per 6 s) and `POST /v1/pairing/challenges` (1 per 2 min), all with burst 10. Behind a loopback proxy the client IP is the rightmost `X-Forwarded-For` hop. |
 | auth | Each `/v1` handler verifies the bearer access token (EdDSA, `aud`, `exp`, `kid`) and loads the device; a revoked device gets `403 device_revoked`. Account context comes **only** from token claims. |
@@ -135,13 +135,13 @@ sequenceDiagram
 **ID-token checks.** The server verifies the token with go-oidc and checks:
 
 - `iss=https://accounts.google.com`
-- `aud` is one of `PRW_GOOGLE_CLIENT_IDS`
+- `aud` is one of `CONNRELAY_GOOGLE_CLIENT_IDS`
 - the signature against the cached Google JWKS
 - `exp` (≤ 60 s skew)
 - `nonce`
 - `email_verified`, when an email is stored
 
-**Allowlist.** The subject is `google:<sub>`. It is checked **before any account row is written**. A denial returns `403 account_not_allowed` and writes a `login_denied` audit row. It also logs a warning, `sign-in denied: subject not in PRW_ALLOWED_SUBJECTS; add it if this is you`, with the `google:<sub>` value, so the owner can find their own subject on first sign-in. There is no open sign-up.
+**Allowlist.** The subject is `google:<sub>`. It is checked **before any account row is written**. A denial returns `403 account_not_allowed` and writes a `login_denied` audit row. It also logs a warning, `sign-in denied: subject not in CONNRELAY_ALLOWED_SUBJECTS; add it if this is you`, with the `google:<sub>` value, so the owner can find their own subject on first sign-in. There is no open sign-up.
 
 **New phones.** A newly signed-in phone needs no extra approval: Google sign-in plus the allowlist is sufficient. The phone is registered as a device with **zero grants** and cannot reach any host until the owner grants access.
 
@@ -149,8 +149,8 @@ sequenceDiagram
 
 | Token | Format | Notes |
 |---|---|---|
-| Access | EdDSA JWT, 10 min | Claims `iss`, `aud=prw-api`, `sub=account_id`, `dev`, `kind`, `sid`, `kid`, `iat`, `exp`, `jti`. Held in phone memory only. |
-| Refresh | 256-bit opaque; stored as SHA-256 | Rotated on each use. Reuse of an old token revokes the whole family. **Device-bound:** refresh requires `pop{nonce, sig}`, an ES256 JWS over JCS `{purpose:"prw.refresh.v1", …}` signed by the phone's device key. |
+| Access | EdDSA JWT, 10 min | Claims `iss`, `aud=connrelay-api`, `sub=account_id`, `dev`, `kind`, `sid`, `kid`, `iat`, `exp`, `jti`. Held in phone memory only. |
+| Refresh | 256-bit opaque; stored as SHA-256 | Rotated on each use. Reuse of an old token revokes the whole family. **Device-bound:** refresh requires `pop{nonce, sig}`, an ES256 JWS over JCS `{purpose:"connrelay.refresh.v1", …}` signed by the phone's device key. |
 | Auth nonce | 32 random bytes, in-memory TTL map (hashed) | Lost on restart; the client simply requests a new one. |
 | Agent session | Authenticated control socket | Signed challenge on connect, re-challenged every 15 min. |
 
@@ -167,7 +167,7 @@ There are two key purposes:
 
 Each purpose has one **active** key and up to two **verify-only** keys. Private keys exist only as files provisioned from the secret store.
 
-To rotate the ticket key (`prw-control keys rotate --purpose ticket`):
+To rotate the ticket key (`connrelay-control keys rotate --purpose ticket`):
 
 1. Generate the new key and deploy it as verify-only.
 2. Push `jwks.update`, signed by the currently pinned key, to all agents. Agents pin the new `kid`.
@@ -238,7 +238,7 @@ It then mints:
 
 | Artifact | Contents |
 |---|---|
-| **Ticket** | Compact JWS, `alg=EdDSA`, `typ=prw-ticket+jwt`. Claims: `iss`, `aud=host`, `sub=phone`, `acct`, `att`, `cap`, `sess?`, `nonce`, `jti`, `iat`, `nbf`, `exp=+60s`, `pv`. Only the `jti` is persisted. |
+| **Ticket** | Compact JWS, `alg=EdDSA`, `typ=connrelay-ticket+jwt`. Claims: `iss`, `aud=host`, `sub=phone`, `acct`, `att`, `cap`, `sess?`, `nonce`, `jti`, `iat`, `nbf`, `exp=+60s`, `pv`. Only the `jti` is persisted. |
 | **Relay tokens** | One per role (`client`, `server`). Claims: `att`, `role`, `dev`, `exp=+90s`, single-use `jti`. Valid only on `/v1/relay`. |
 | **ICE servers** | STUN plus TURN UDP, TCP and TLS-on-443 URLs, with ephemeral credentials. |
 
@@ -300,7 +300,7 @@ Two goroutines copy binary WebSocket messages unchanged.
 | Join wait | 15 s |
 | Idle | 120 s |
 | Message size | ≤ 64 KiB |
-| Per-attempt rate | token bucket at `PRW_RELAY_MAX_BPS` (2 Mbit/s) |
+| Per-attempt rate | token bucket at `CONNRELAY_RELAY_MAX_BPS` (2 Mbit/s) |
 | Per-attempt total | 2 GiB |
 | Concurrent splice caps | **(planned)**: 16 per account and a global limit |
 
@@ -311,7 +311,7 @@ A revoke closes the splice for the affected attempt with code 4403.
 **Handshake.**
 
 1. The server sends `auth.challenge`.
-2. The agent replies with `auth.response`: an ES256 JWS over JCS with purpose `prw.agent.v1`.
+2. The agent replies with `auth.response`: an ES256 JWS over JCS with purpose `connrelay.agent.v1`.
 3. The server sends `auth.ok`, then `grant.lease` and `jwks.update`.
 
 One socket per host is allowed: a newer socket supersedes the old one, which is closed with 4400. A revoked device is closed with 4403. Periodic re-challenge every 15 minutes is **(planned)**.
@@ -371,16 +371,16 @@ The metrics below are the target set; no `/metrics` endpoint exists yet.
 
 | Metric | Type | Labels |
 |---|---|---|
-| `prw_http_requests_total` | counter | `route`, `method`, `code` |
-| `prw_ws_connections` | gauge | `endpoint` |
-| `prw_agents_online` | gauge | — |
-| `prw_attempts_total` | counter | `outcome` |
-| `prw_attempt_connect_seconds` | histogram | `path_type` |
-| `prw_relay_bytes_total` | counter | `direction` |
-| `prw_relay_active_splices` | gauge | — |
-| `prw_revoke_propagation_seconds` | histogram | — |
-| `prw_outbox_pending` | gauge | — |
-| `prw_build_info` | gauge | `version`, `commit` |
+| `connrelay_http_requests_total` | counter | `route`, `method`, `code` |
+| `connrelay_ws_connections` | gauge | `endpoint` |
+| `connrelay_agents_online` | gauge | — |
+| `connrelay_attempts_total` | counter | `outcome` |
+| `connrelay_attempt_connect_seconds` | histogram | `path_type` |
+| `connrelay_relay_bytes_total` | counter | `direction` |
+| `connrelay_relay_active_splices` | gauge | — |
+| `connrelay_revoke_propagation_seconds` | histogram | — |
+| `connrelay_outbox_pending` | gauge | — |
+| `connrelay_build_info` | gauge | `version`, `commit` |
 
 Device IDs will never be used as metric labels.
 
@@ -441,7 +441,7 @@ var ErrGrantMissing = apperr.New("access_grant_missing", http.StatusForbidden, f
 
 ## 9. Testing
 
-Tests run against a real Postgres started in Docker by `dbtest`; `PRW_REQUIRE_DB=1` turns a missing database into a failure instead of a skip.
+Tests run against a real Postgres started in Docker by `dbtest`; `CONNRELAY_REQUIRE_DB=1` turns a missing database into a failure instead of a skip.
 
 | Layer | Coverage |
 |---|---|

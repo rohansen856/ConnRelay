@@ -1,8 +1,8 @@
-# Private Remote Workspace
+# ConnRelay
 
-> Working name. **Status:** working end to end for Linux hosts and Android. Sign-in, pairing, grants and persistent terminals run on a real phone against the [local dev stack](docs/operations/deployment.md#local-development-stack). iOS, security hardening and the public AWS deployment are still open ([roadmap](docs/roadmap.md#current-status)). Not ready for production use.
+> **Status:** working end to end for Linux hosts and Android. Sign-in, pairing, grants and persistent terminals run on a real phone against the [local dev stack](docs/operations/deployment.md#local-development-stack). iOS, security hardening and the public AWS deployment are still open ([roadmap](docs/roadmap.md#current-status)). Not ready for production use.
 
-Private Remote Workspace (PRW) gives your phones secure terminal access to your Linux computers from any network. It is self-hosted and works without a VPN client, a public SSH port or a third-party relay.
+ConnRelay gives your phones secure terminal access to your Linux computers from any network. It is self-hosted and works without a VPN client, a public SSH port or a third-party relay.
 
 You can pair any number of phones and computers. Open a terminal on a computer from your phone, start Claude Code or Codex, and walk away. Sessions are tmux-backed, so they keep running when your phone loses signal, the app is killed or the agent restarts. When you reconnect, the terminal reattaches exactly where it was.
 
@@ -34,7 +34,7 @@ flowchart LR
 ```
 
 1. **Sign in.** You sign in to the phone app with Google. Only allowlisted accounts can use the deployment.
-2. **Pair.** On the computer, `prw-agent pair` shows a QR code. You scan it, check the fingerprint, and grant the phone terminal access.
+2. **Pair.** On the computer, `connrelay-agent pair` shows a QR code. You scan it, check the fingerprint, and grant the phone terminal access.
 3. **Get a ticket.** Tapping **Connect** gets a short-lived signed ticket. The peers then negotiate a connection through the control plane, trying direct, then TURN, then the WSS relay.
 4. **Verify identities.** Each peer proves its enrolled device key over the encrypted channel before any terminal command is accepted.
 5. **Attach.** The agent attaches you to a new or existing tmux session.
@@ -45,7 +45,7 @@ Details: [architecture overview](docs/architecture/overview.md).
 
 | Path | Contents | Status |
 |---|---|---|
-| `core/prwcore/` | Shared Go core: frames, flow control, attestation, tokens, WebRTC and WSS-relay transports, connection manager, phone connect and terminal clients, gomobile facade | ✔ |
+| `core/connrelaycore/` | Shared Go core: frames, flow control, attestation, tokens, WebRTC and WSS-relay transports, connection manager, phone connect and terminal clients, gomobile facade | ✔ |
 | `services/control/` | Go control plane: Google sign-in, devices, pairing, grants, connection attempts, signaling, WSS relay, TURN credentials, revocation; migrations in `migrations/` | ✔ (no metrics or admin CLI yet) |
 | `agents/host/` | Go Linux host agent: pairing CLI, tmux sessions, both transports, grant lease cache, systemd user unit | ✔ (no `.deb` yet) |
 | `apps/mobile/` | Flutter phone app with the gomobile core and a vendored xterm fork | Android ✔ · iOS bridge open |
@@ -59,7 +59,7 @@ Details: [architecture overview](docs/architecture/overview.md).
 
 ```sh
 deploy/dev/devstack.sh up            # Postgres + control plane + public HTTPS URL
-prw-agent pair --server "$(cat ~/.local/share/prw-dev/public_url)" && prw-agent run
+connrelay-agent pair --server "$(cat ~/.local/share/connrelay-dev/public_url)" && connrelay-agent run
 ```
 
 Then build the Android app against that URL. The full steps, including the Google client ID and the sign-in allowlist, are in [deployment](docs/operations/deployment.md#local-development-stack).
@@ -68,7 +68,7 @@ Then build the Android app against that URL. The full steps, including the Googl
 
 ```sh
 make vet test-race              # all Go modules (needs tmux; Docker for database tests)
-PRW_REQUIRE_DB=1 make test-race # same, failing instead of skipping without a database
+CONNRELAY_REQUIRE_DB=1 make test-race # same, failing instead of skipping without a database
 make mobile                     # Flutter app: analyze + tests (incl. xterm fork and TUI replay)
 make netlab                     # Docker NAT/TURN/HTTPS-proxy lab
 make spike-s4                   # tmux survives agent restart under systemd --user
@@ -80,7 +80,7 @@ make spike-s4                   # tmux survives agent restart under systemd --us
 |---|---|
 | Architecture | [Overview](docs/architecture/overview.md) · [Decisions (ADRs)](docs/architecture/decisions.md) |
 | Technical | [Protocol](docs/technical/protocol.md) · [Security](docs/technical/security.md) · [Data model](docs/technical/data-model.md) · [API](docs/technical/api.md) |
-| Components | [Control plane](docs/components/control-plane.md) · [Host agent](docs/components/host-agent.md) · [Mobile app](docs/components/mobile-app.md) · [prwcore](docs/components/prwcore.md) |
+| Components | [Control plane](docs/components/control-plane.md) · [Host agent](docs/components/host-agent.md) · [Mobile app](docs/components/mobile-app.md) · [connrelaycore](docs/components/connrelaycore.md) |
 | Operations | [Deployment](docs/operations/deployment.md) · [Runbooks](docs/operations/runbooks.md) |
 | Development | [Contributing](docs/development/contributing.md) · [Testing](docs/development/testing.md) · [Spike results](docs/development/spike-results.md) |
 | Planning | [Roadmap](docs/roadmap.md) |

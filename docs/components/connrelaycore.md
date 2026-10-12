@@ -1,9 +1,9 @@
-# prwcore: Shared Go Core
+# connrelaycore: Shared Go Core
 
-> **Status:** Implemented. Both the host agent and the Android app use prwcore; the app links it through gomobile (decided after the on-device transport spike, see [spike results](../development/spike-results.md)). Items marked **(planned)** are not built yet.
-> **Location:** `core/prwcore/`
+> **Status:** Implemented. Both the host agent and the Android app use connrelaycore; the app links it through gomobile (decided after the on-device transport spike, see [spike results](../development/spike-results.md)). Items marked **(planned)** are not built yet.
+> **Location:** `core/connrelaycore/`
 
-prwcore is the single implementation of the PRW data-plane protocol. It covers:
+connrelaycore is the single implementation of the ConnRelay data-plane protocol. It covers:
 
 - framing and flow control
 - peer identity attestation
@@ -12,20 +12,20 @@ prwcore is the single implementation of the PRW data-plane protocol. It covers:
 
 The host agent links it directly. The phone app links it through gomobile, so both ends run the same code. This removes interop risk between two WebRTC stacks and keeps the protocol in one place.
 
-prwcore contains no custom cryptography. It composes Pion (DTLS/SCTP), Go `crypto/tls`, `crypto/ecdsa` and `go-jose`.
+connrelaycore contains no custom cryptography. It composes Pion (DTLS/SCTP), Go `crypto/tls`, `crypto/ecdsa` and `go-jose`.
 
 ---
 
 ## 1. Package layout
 
 ```text
-core/prwcore/
+core/connrelaycore/
   frame/        12-byte header codec, size validation
   control/      control message envelope carried in CONTROL frames
   flow/         per-stream credit accounting (output 256 KiB, input 64 KiB windows)
   attest/       JCS canonicalisation, ES256 JWS build/verify, DER↔raw signatures,
-                peer attestation and proof-of-possession (prw.auth.v1, prw.refresh.v1,
-                prw.agent.v1, prw.pair.create.v1, prw.pair.complete.v1)
+                peer attestation and proof-of-possession (connrelay.auth.v1, connrelay.refresh.v1,
+                connrelay.agent.v1, connrelay.pair.create.v1, connrelay.pair.complete.v1)
   token/        EdDSA server tokens: tickets, leases, relay and access tokens; key sets
   peer/         hello + mutual attestation handshake, path.select, identity_verified gate
   transport/
@@ -51,7 +51,7 @@ Both transports give the layers above them the same abstraction: one CONTROL str
 |---|---|---|
 | Library | `github.com/pion/webrtc/v4` | `github.com/coder/websocket` + `crypto/tls` |
 | Encryption | DTLS 1.2 (WebRTC) | TLS 1.3 end to end *inside* the outer WSS/TLS |
-| Channels | `prw-ctl` (negotiated id 0), `prw-term` (id 1); reliable, ordered | One TLS byte stream; frames concatenated |
+| Channels | `connrelay-ctl` (negotiated id 0), `connrelay-term` (id 1); reliable, ordered | One TLS byte stream; frames concatenated |
 | Framing | One frame per DataChannel message | Frames back to back; `len` delimits them |
 | NAT traversal | ICE: host, srflx and relay candidates (TURN UDP/TCP and TLS on 443) | None needed; the connection is outbound TCP/443 only |
 | Peer certificate | Ephemeral DTLS certificate; fingerprint taken from the SDP | Ephemeral self-signed P-256 certificate; fingerprint exchanged via signaling |
@@ -68,12 +68,12 @@ Both transports give the layers above them the same abstraction: one CONTROL str
 ### WSS relay with inner TLS 1.3
 
 1. Each peer connects to `wss://api.example.invalid/v1/relay` and sends `{"type":"join", attempt_id, relay_token, role}`. The host joins as `server` and the phone as `client`.
-2. Once both have received `{"type":"joined"}`, the WebSocket becomes an opaque byte pipe. prwcore adapts it to a `net.Conn`.
-3. Each peer generates an ephemeral P-256 key and a self-signed certificate (CN `prw-<attempt>`, valid for 1 h). Each sends the SHA-256 of its certificate as `tls_fingerprint` over signaling.
+2. Once both have received `{"type":"joined"}`, the WebSocket becomes an opaque byte pipe. connrelaycore adapts it to a `net.Conn`.
+3. Each peer generates an ephemeral P-256 key and a self-signed certificate (CN `connrelay-<attempt>`, valid for 1 h). Each sends the SHA-256 of its certificate as `tls_fingerprint` over signaling.
 4. The peers run TLS 1.3 with these settings:
    - `MinVersion = tls.VersionTLS13`
    - `ClientAuth = RequireAnyClientCert`
-   - ALPN `prw/1`
+   - ALPN `connrelay/1`
    - a custom `VerifyPeerCertificate` that compares the peer certificate's fingerprint with the signaled value. Chain validation is disabled because the certificates are ephemeral and self-signed.
 5. Attestation (§3) then binds the TLS certificates to the enrolled device keys. Even if signaling were tampered with, the relay and the control plane cannot read or alter the terminal stream.
 
@@ -87,7 +87,7 @@ The attestation is a compact JWS (`ES256`) over a **JCS-canonical (RFC 8785)** J
 
 ```json
 {
-  "purpose": "prw.peer.attest.v1", "pv": 1,
+  "purpose": "connrelay.peer.attest.v1", "pv": 1,
   "att": "<attempt_id>", "from": "<own device_id>", "to": "<peer device_id>",
   "role": "phone|host", "nonce": "<server attestation nonce>",
   "transport": "dtls|tls13",
@@ -176,10 +176,10 @@ t=20s  no winner → fail "connect_timeout"; the report lists each path's timing
 
 ## 7. gomobile binding surface
 
-gomobile can only export simple types, so `prwcore/mobile` exposes strings, ints, byte slices and two interfaces. All protocol and crypto encoding stays in Go; the app never re-implements attestation, framing or flow control.
+gomobile can only export simple types, so `connrelaycore/mobile` exposes strings, ints, byte slices and two interfaces. All protocol and crypto encoding stays in Go; the app never re-implements attestation, framing or flow control.
 
 ```go
-// package mobile (Java: dev.prw.core.mobile)
+// package mobile (Java: dev.connrelay.core.mobile)
 type Signer interface {            // Android Keystore / Secure Enclave
     PublicKeySPKI() ([]byte, error)
     SignDER(digest []byte) ([]byte, error)
@@ -190,7 +190,7 @@ type Events interface {
 }
 
 func Fingerprint(spki []byte) string
-func SignPoP(purpose, nonce, spkiFP, deviceID string, s Signer) (string, error) // prw.auth.v1 / prw.refresh.v1
+func SignPoP(purpose, nonce, spkiFP, deviceID string, s Signer) (string, error) // connrelay.auth.v1 / connrelay.refresh.v1
 func Connect(api, accessToken, deviceID, hostID, pinnedFP, mode string, timeoutMS int, s Signer, ev Events) (*Session, error)
 
 func (s *Session) Path() string      // direct | turn | wss_relay
@@ -207,8 +207,8 @@ func (s *Session) Close()
 
 - `mode` is `auto`, `webrtc` or `wss`. Blocking calls must run off the UI thread.
 - Errors are stable codes (`host_key_mismatch`, `access_grant_missing`, …) that the app maps to UI copy.
-- `MainActivity.kt` adapts this to Flutter's `MethodChannel('prw/core')` and `EventChannel('prw/core/events')`; see [mobile app](mobile-app.md#5-native-bridge).
-- `apps/mobile/gocore/build-aar.sh` builds the AAR (`gomobile bind -target=android/arm64,android/amd64 -androidapi 26 -javapkg dev.prw.core -ldflags=-checklinkname=0`). An iOS binding is **(planned)**.
+- `MainActivity.kt` adapts this to Flutter's `MethodChannel('connrelay/core')` and `EventChannel('connrelay/core/events')`; see [mobile app](mobile-app.md#5-native-bridge).
+- `apps/mobile/gocore/build-aar.sh` builds the AAR (`gomobile bind -target=android/arm64,android/amd64 -androidapi 26 -javapkg dev.connrelay.core -ldflags=-checklinkname=0`). An iOS binding is **(planned)**.
 
 ---
 
