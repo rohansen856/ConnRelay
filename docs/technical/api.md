@@ -107,7 +107,7 @@ There is deliberately **no REST endpoint for creating, attaching or terminating 
 
 Response `200`:
 ```json
-{"nonce": "b64url-32-bytes", "expires_at": "2026-10-13T10:02:00Z"}
+{"nonce": "b64url-32-bytes", "expires_at": "2026-06-17T10:02:00Z"}
 ```
 
 The nonce is single-use and expires after 120 s. Rate limit: 1 per 2 s per IP, burst 10.
