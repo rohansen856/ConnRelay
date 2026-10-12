@@ -1,4 +1,4 @@
-package dev.prw.app
+package dev.connrelay.app
 
 import android.os.Build
 import android.security.keystore.KeyGenParameterSpec
@@ -15,7 +15,7 @@ import java.security.spec.ECGenParameterSpec
  * when available, otherwise the TEE. The private key cannot be exported.
  * Go passes already-hashed SHA-256 digests, hence NONEwithECDSA.
  */
-class DeviceKey(private val alias: String = "prw-device-key-v1") : dev.prw.core.mobile.Signer {
+class DeviceKey(private val alias: String = "connrelay-device-key-v1") : dev.connrelay.core.mobile.Signer {
     private val ks: KeyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
 
     init {

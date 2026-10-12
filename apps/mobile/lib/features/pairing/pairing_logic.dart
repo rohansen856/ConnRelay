@@ -1,4 +1,4 @@
-/// A parsed pairing QR code: prw://pair?v=1&ref=..&fp=..&api=..
+/// A parsed pairing QR code: connrelay://pair?v=1&ref=..&fp=..&api=..
 class PairingQr {
   PairingQr(this.ref, this.fingerprint, this.api);
   final String ref, fingerprint, api;
@@ -14,14 +14,14 @@ class PairingError implements Exception {
 /// Parses and validates a QR payload against the server this app uses.
 PairingQr parsePairingQr(String raw, String expectedApi) {
   final uri = Uri.tryParse(raw.trim());
-  if (uri == null || uri.scheme != 'prw' || uri.host != 'pair') {
-    throw PairingError('This is not a pairing code from prw-agent.');
+  if (uri == null || uri.scheme != 'connrelay' || uri.host != 'pair') {
+    throw PairingError('This is not a pairing code from connrelay-agent.');
   }
   final q = uri.queryParameters;
   if (q['v'] != '1') throw PairingError('This pairing code needs a newer app.');
   final ref = q['ref'] ?? '', fp = (q['fp'] ?? '').toLowerCase(), api = q['api'] ?? '';
   if (ref.isEmpty || !RegExp(r'^[0-9a-f]{64}$').hasMatch(fp)) {
-    throw PairingError('The pairing code is incomplete. Run prw-agent pair again.');
+    throw PairingError('The pairing code is incomplete. Run connrelay-agent pair again.');
   }
   if (_norm(api) != _norm(expectedApi)) {
     throw PairingError('This computer is pairing with a different server ($api).');

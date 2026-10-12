@@ -5,12 +5,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
-import 'package:prw/app/app.dart';
-import 'package:prw/app/config.dart';
-import 'package:prw/core/api.dart';
-import 'package:prw/features/devices/devices_providers.dart' show devicesPollInterval;
-import 'package:prw/core/auth.dart';
-import 'package:prw/core/session_store.dart';
+import 'package:connrelay/app/app.dart';
+import 'package:connrelay/app/config.dart';
+import 'package:connrelay/core/api.dart';
+import 'package:connrelay/features/devices/devices_providers.dart' show devicesPollInterval;
+import 'package:connrelay/core/auth.dart';
+import 'package:connrelay/core/session_store.dart';
 
 import 'fakes.dart';
 
@@ -43,7 +43,7 @@ Widget app(MemoryStore kv, List<Map<String, dynamic>> devices, {http.Response? F
       ),
     ),
   ],
-  child: const PrwApp(),
+  child: const ConnRelayApp(),
 );
 
 void main() {
@@ -86,7 +86,7 @@ void main() {
     await t.pumpWidget(app(kv, []));
     await t.pumpAndSettle();
     expect(find.text('Add your first computer'), findsOneWidget);
-    expect(find.textContaining('prw-agent pair'), findsOneWidget);
+    expect(find.textContaining('connrelay-agent pair'), findsOneWidget);
   });
 
   testWidgets('devices: pull to refresh works for short, empty and failed lists', (t) async {

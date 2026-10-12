@@ -1,7 +1,7 @@
 /// Build-time configuration, passed with --dart-define:
 ///
-///   flutter run --dart-define=PRW_API=https://api.example.invalid \
-///               --dart-define=PRW_GOOGLE_SERVER_CLIENT_ID=xxxx.apps.googleusercontent.com
+///   flutter run --dart-define=CONNRELAY_API=https://api.example.invalid \
+///               --dart-define=CONNRELAY_GOOGLE_SERVER_CLIENT_ID=xxxx.apps.googleusercontent.com
 class AppConfig {
   const AppConfig({required this.apiBase, required this.googleServerClientId});
 
@@ -13,7 +13,7 @@ class AppConfig {
   final String googleServerClientId;
 
   static AppConfig fromEnvironment() => const AppConfig(
-        apiBase: String.fromEnvironment('PRW_API', defaultValue: 'https://api.example.invalid'),
-        googleServerClientId: String.fromEnvironment('PRW_GOOGLE_SERVER_CLIENT_ID'),
+        apiBase: String.fromEnvironment('CONNRELAY_API', defaultValue: 'https://api.example.invalid'),
+        googleServerClientId: String.fromEnvironment('CONNRELAY_GOOGLE_SERVER_CLIENT_ID'),
       );
 }

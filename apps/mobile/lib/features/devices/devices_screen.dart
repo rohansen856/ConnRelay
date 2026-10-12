@@ -48,7 +48,7 @@ class DevicesScreen extends ConsumerWidget {
                 Center(child: Text('Add your first computer')),
                 Padding(
                   padding: EdgeInsets.all(24),
-                  child: Text('Install prw-agent on a Linux computer, run "prw-agent pair --server <your server>", '
+                  child: Text('Install connrelay-agent on a Linux computer, run "connrelay-agent pair --server <your server>", '
                       'then tap Add computer and scan the code it shows.',
                       textAlign: TextAlign.center),
                 ),

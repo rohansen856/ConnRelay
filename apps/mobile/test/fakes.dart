@@ -2,9 +2,9 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/services.dart';
-import 'package:prw/core/auth.dart';
-import 'package:prw/core/native.dart';
-import 'package:prw/core/session_store.dart';
+import 'package:connrelay/core/auth.dart';
+import 'package:connrelay/core/native.dart';
+import 'package:connrelay/core/session_store.dart';
 
 class MemoryStore implements KeyValueStore {
   final m = <String, String>{};

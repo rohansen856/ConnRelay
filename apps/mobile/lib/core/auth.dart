@@ -100,7 +100,7 @@ class AuthController extends StateNotifier<AuthState> implements TokenSource {
       final spki = await _native.publicKey();
       final fp = await _native.fingerprint(spki);
       final nonce = await _challenge();
-      final sig = await _native.signPoP('prw.auth.v1', nonce, spkiFp: fp);
+      final sig = await _native.signPoP('connrelay.auth.v1', nonce, spkiFp: fp);
       final r = await _api.post('/v1/auth/exchange', {
         'provider': 'google',
         'id_token': idToken,
@@ -147,7 +147,7 @@ class AuthController extends StateNotifier<AuthState> implements TokenSource {
     if (s == null) return false;
     try {
       final nonce = await _challenge();
-      final sig = await _native.signPoP('prw.refresh.v1', nonce, deviceId: s.deviceId);
+      final sig = await _native.signPoP('connrelay.refresh.v1', nonce, deviceId: s.deviceId);
       final r = await _api.post('/v1/auth/refresh', {'refresh_token': s.refreshToken, 'pop': {'nonce': nonce, 'sig': sig}});
       s.accessToken = r['access_token'] as String;
       s.refreshToken = r['refresh_token'] as String;

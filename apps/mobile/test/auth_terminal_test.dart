@@ -5,12 +5,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
-import 'package:prw/app/config.dart';
-import 'package:prw/core/api.dart';
-import 'package:prw/core/auth.dart';
-import 'package:prw/core/native.dart';
-import 'package:prw/core/session_store.dart';
-import 'package:prw/features/terminal/terminal_controller.dart';
+import 'package:connrelay/app/config.dart';
+import 'package:connrelay/core/api.dart';
+import 'package:connrelay/core/auth.dart';
+import 'package:connrelay/core/native.dart';
+import 'package:connrelay/core/session_store.dart';
+import 'package:connrelay/features/terminal/terminal_controller.dart';
 
 import 'fakes.dart';
 
@@ -64,13 +64,13 @@ void main() {
     final ex = requests['/v1/auth/exchange']!;
     expect(ex['id_token'], 'google-id-token');
     expect(ex['oidc_nonce'], ids.lastNonce, reason: 'the nonce given to Google must be sent to the server');
-    expect(ex['pop'], {'nonce': 'server-nonce', 'sig': 'sig(prw.auth.v1,server-nonce,${'ab' * 32},)'});
+    expect(ex['pop'], {'nonce': 'server-nonce', 'sig': 'sig(connrelay.auth.v1,server-nonce,${'ab' * 32},)'});
     expect(ex['device']['public_key_spki'], isNotEmpty);
     expect((await SessionStore(kv).load())!.refreshToken, 'r1');
 
     // Refresh is device-bound and stores the rotated token.
     expect(await auth.refresh(), isTrue);
-    expect(requests['/v1/auth/refresh']!['pop']['sig'], 'sig(prw.refresh.v1,server-nonce,,phone-1)');
+    expect(requests['/v1/auth/refresh']!['pop']['sig'], 'sig(connrelay.refresh.v1,server-nonce,,phone-1)');
     expect((await SessionStore(kv).load())!.refreshToken, 'r2');
   });
 

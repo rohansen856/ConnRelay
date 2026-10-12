@@ -1,4 +1,4 @@
-package dev.prw.app
+package dev.connrelay.app
 
 import android.os.Handler
 import android.os.Looper
@@ -10,7 +10,7 @@ import io.flutter.plugin.common.MethodChannel
 import java.util.concurrent.Executors
 
 /**
- * Bridges Flutter to the device key and the Go core (dev.prw.core.mobile).
+ * Bridges Flutter to the device key and the Go core (dev.connrelay.core.mobile).
  * Go calls block (network, attestation), so they run on a worker thread;
  * results and events are posted back to the main thread.
  */
@@ -19,10 +19,10 @@ class MainActivity : FlutterActivity() {
     private val io = Executors.newSingleThreadExecutor() // input/resize must not queue behind connect
     private val main = Handler(Looper.getMainLooper())
     private val key by lazy { DeviceKey() }
-    private var session: dev.prw.core.mobile.Session? = null
+    private var session: dev.connrelay.core.mobile.Session? = null
     private var sink: EventChannel.EventSink? = null
 
-    private val events = object : dev.prw.core.mobile.Events {
+    private val events = object : dev.connrelay.core.mobile.Events {
         override fun onOutput(stream: Long, data: ByteArray) {
             main.post { sink?.success(mapOf("kind" to "output", "stream" to stream.toInt(), "data" to data)) }
         }
@@ -34,7 +34,7 @@ class MainActivity : FlutterActivity() {
 
     override fun configureFlutterEngine(engine: FlutterEngine) {
         super.configureFlutterEngine(engine)
-        EventChannel(engine.dartExecutor.binaryMessenger, "prw/core/events").setStreamHandler(object : EventChannel.StreamHandler {
+        EventChannel(engine.dartExecutor.binaryMessenger, "connrelay/core/events").setStreamHandler(object : EventChannel.StreamHandler {
             override fun onListen(arguments: Any?, events: EventChannel.EventSink) {
                 sink = events
             }
@@ -43,7 +43,7 @@ class MainActivity : FlutterActivity() {
                 sink = null
             }
         })
-        MethodChannel(engine.dartExecutor.binaryMessenger, "prw/core").setMethodCallHandler { call, result ->
+        MethodChannel(engine.dartExecutor.binaryMessenger, "connrelay/core").setMethodCallHandler { call, result ->
             val pool = if (call.method == "input" || call.method == "resize") io else worker
             pool.execute {
                 try {
@@ -58,19 +58,19 @@ class MainActivity : FlutterActivity() {
         }
     }
 
-    private fun current(): dev.prw.core.mobile.Session = session ?: throw IllegalStateException("not_connected")
+    private fun current(): dev.connrelay.core.mobile.Session = session ?: throw IllegalStateException("not_connected")
 
     private fun handle(call: MethodCall): Any? = when (call.method) {
         "publicKey" -> key.publicKeySPKI()
-        "fingerprint" -> dev.prw.core.mobile.Mobile.fingerprint(call.argument<ByteArray>("spki"))
-        "signPoP" -> dev.prw.core.mobile.Mobile.signPoP(
+        "fingerprint" -> dev.connrelay.core.mobile.Mobile.fingerprint(call.argument<ByteArray>("spki"))
+        "signPoP" -> dev.connrelay.core.mobile.Mobile.signPoP(
             call.argument<String>("purpose"), call.argument<String>("nonce"),
             call.argument<String>("spkiFp") ?: "", call.argument<String>("deviceId") ?: "", key,
         )
         "connect" -> {
             session?.close()
             session = null
-            val s = dev.prw.core.mobile.Mobile.connect(
+            val s = dev.connrelay.core.mobile.Mobile.connect(
                 call.argument<String>("api"), call.argument<String>("accessToken"), call.argument<String>("deviceId"),
                 call.argument<String>("hostId"), call.argument<String>("pinnedFp"), call.argument<String>("mode") ?: "auto",
                 30000L, key, events,

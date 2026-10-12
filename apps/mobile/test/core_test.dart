@@ -3,10 +3,10 @@ import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
-import 'package:prw/core/api.dart';
-import 'package:prw/features/pairing/pairing_logic.dart';
-import 'package:prw/features/terminal/terminal_controller.dart';
-import 'package:prw/features/terminal/terminal_screen.dart';
+import 'package:connrelay/core/api.dart';
+import 'package:connrelay/features/pairing/pairing_logic.dart';
+import 'package:connrelay/features/terminal/terminal_controller.dart';
+import 'package:connrelay/features/terminal/terminal_screen.dart';
 
 class Tokens implements TokenSource {
   String token = 'old';
@@ -61,16 +61,16 @@ void main() {
     final fp = 'a1' * 32;
     const api = 'https://api.example.invalid';
     test('parses a valid payload', () {
-      final q = parsePairingQr('prw://pair?v=1&ref=REF&fp=$fp&api=${Uri.encodeComponent(api)}', '$api/');
+      final q = parsePairingQr('connrelay://pair?v=1&ref=REF&fp=$fp&api=${Uri.encodeComponent(api)}', '$api/');
       expect(q.ref, 'REF');
       expect(q.fingerprint, fp);
     });
     for (final bad in {
       'not a pairing code': 'https://example.invalid',
-      'other server': 'prw://pair?v=1&ref=R&fp=$fp&api=https://evil.invalid',
-      'short fingerprint': 'prw://pair?v=1&ref=R&fp=abcd&api=$api',
-      'newer version': 'prw://pair?v=2&ref=R&fp=$fp&api=$api',
-      'missing ref': 'prw://pair?v=1&fp=$fp&api=$api',
+      'other server': 'connrelay://pair?v=1&ref=R&fp=$fp&api=https://evil.invalid',
+      'short fingerprint': 'connrelay://pair?v=1&ref=R&fp=abcd&api=$api',
+      'newer version': 'connrelay://pair?v=2&ref=R&fp=$fp&api=$api',
+      'missing ref': 'connrelay://pair?v=1&fp=$fp&api=$api',
     }.entries) {
       test('rejects ${bad.key}', () => expect(() => parsePairingQr(bad.value, api), throwsA(isA<PairingError>())));
     }

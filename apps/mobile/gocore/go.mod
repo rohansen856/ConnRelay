@@ -4,7 +4,7 @@ go 1.26.0
 
 toolchain go1.27.2
 
-require github.com/rohansen856/connrelay/core/prwcore v0.0.0
+require github.com/rohansen856/connrelay/core/connrelaycore v0.0.0
 
 require (
 	github.com/coder/websocket v1.8.15 // indirect
@@ -37,6 +37,6 @@ require (
 	golang.org/x/tools v0.52.0 // indirect
 )
 
-replace github.com/rohansen856/connrelay/core/prwcore => ../../../core/prwcore
+replace github.com/rohansen856/connrelay/core/connrelaycore => ../../../core/connrelaycore
 
 tool golang.org/x/mobile/cmd/gobind

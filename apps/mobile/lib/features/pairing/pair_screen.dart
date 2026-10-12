@@ -52,9 +52,9 @@ class _PairScreenState extends ConsumerState<PairScreen> {
       setState(() => _error = e.message);
     } on ApiException catch (e) {
       setState(() => _error = switch (e.code) {
-            'pairing_expired' => 'This code expired. Run prw-agent pair again on the computer.',
+            'pairing_expired' => 'This code expired. Run connrelay-agent pair again on the computer.',
             'pairing_used' => 'This code was already used.',
-            'pairing_locked' => 'Too many failed attempts. Run prw-agent pair again.',
+            'pairing_locked' => 'Too many failed attempts. Run connrelay-agent pair again.',
             'not_found' => 'No computer is waiting with that code.',
             _ => e.message,
           });
@@ -82,7 +82,7 @@ class _PairScreenState extends ConsumerState<PairScreen> {
         }
         await Future<void>.delayed(const Duration(seconds: 1));
       }
-      setState(() => _error = 'The computer did not finish pairing. Check that prw-agent is still running.');
+      setState(() => _error = 'The computer did not finish pairing. Check that connrelay-agent is still running.');
     } on ApiException catch (e) {
       setState(() => _error = e.message);
     } finally {
@@ -115,7 +115,7 @@ class _PairScreenState extends ConsumerState<PairScreen> {
         if (_error != null) Padding(padding: const EdgeInsets.all(12), child: Text(_error!, style: TextStyle(color: Theme.of(context).colorScheme.error))),
         Padding(
           padding: const EdgeInsets.all(16),
-          child: Text('On the computer run:  prw-agent pair --server $api', textAlign: TextAlign.center),
+          child: Text('On the computer run:  connrelay-agent pair --server $api', textAlign: TextAlign.center),
         ),
         TextButton(onPressed: () => setState(() => _typing = true), child: const Text('Enter the code instead')),
         const SizedBox(height: 16),
@@ -145,7 +145,7 @@ class _PairScreenState extends ConsumerState<PairScreen> {
       const SizedBox(height: 16),
       Text(_qrFp != null
           ? 'The key matches the QR code on the computer.'
-          : 'Check that this key matches the one prw-agent printed:'),
+          : 'Check that this key matches the one connrelay-agent printed:'),
       const SizedBox(height: 8),
       SelectableText(groupFingerprint(fp), style: const TextStyle(fontFamily: 'monospace', fontSize: 16)),
       const SizedBox(height: 16),
@@ -153,7 +153,7 @@ class _PairScreenState extends ConsumerState<PairScreen> {
         value: _grant,
         onChanged: (v) => setState(() => _grant = v),
         title: const Text('Give this phone terminal access'),
-        subtitle: const Text('Terminal sessions run with the permissions of the user running prw-agent.'),
+        subtitle: const Text('Terminal sessions run with the permissions of the user running connrelay-agent.'),
       ),
       if (_error != null) Text(_error!, style: TextStyle(color: Theme.of(context).colorScheme.error)),
       const SizedBox(height: 16),

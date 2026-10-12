@@ -36,7 +36,7 @@ abstract class NativeCore {
   /// DER SubjectPublicKeyInfo of the device key (created on first use).
   Future<Uint8List> publicKey();
 
-  /// Proof of possession: purpose prw.auth.v1 (with spkiFp) or prw.refresh.v1
+  /// Proof of possession: purpose connrelay.auth.v1 (with spkiFp) or connrelay.refresh.v1
   /// (with deviceId).
   Future<String> signPoP(String purpose, String nonce, {String spkiFp = '', String deviceId = ''});
 
@@ -71,8 +71,8 @@ class ChannelCore implements NativeCore {
     });
   }
 
-  static const _m = MethodChannel('prw/core');
-  static const _events = EventChannel('prw/core/events');
+  static const _m = MethodChannel('connrelay/core');
+  static const _events = EventChannel('connrelay/core/events');
   final _ctrl = StreamController<CoreEvent>.broadcast();
 
   @override

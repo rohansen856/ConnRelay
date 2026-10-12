@@ -64,7 +64,7 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> with WidgetsBin
         context: context,
         builder: (c) => AlertDialog(
           title: const Text('Trust this computer?'),
-          content: Text('First connection from this phone. Check that the key matches `prw-agent status` on '
+          content: Text('First connection from this phone. Check that the key matches `connrelay-agent status` on '
               '"${dev.name}":\n\n${groupFingerprint(dev.fingerprint)}'),
           actions: [
             TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('Cancel')),

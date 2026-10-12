@@ -6,7 +6,7 @@ plugins {
 }
 
 android {
-    namespace = "dev.prw.app"
+    namespace = "dev.connrelay.app"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
 
@@ -21,7 +21,7 @@ android {
 
     defaultConfig {
         // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
-        applicationId = "dev.prw.app"
+        applicationId = "dev.connrelay.app"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = 26
@@ -41,7 +41,7 @@ android {
 
 dependencies {
     // Shared Go core, built by ../gocore/build-aar.sh (gomobile).
-    implementation(files("libs/prwcore.aar"))
+    implementation(files("libs/connrelaycore.aar"))
 }
 
 flutter {
