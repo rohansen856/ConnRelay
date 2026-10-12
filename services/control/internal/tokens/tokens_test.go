@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rohansen856/connrelay/core/prwcore/token"
+	"github.com/rohansen856/connrelay/core/connrelaycore/token"
 )
 
 func manager(t *testing.T, iss string) *Manager {

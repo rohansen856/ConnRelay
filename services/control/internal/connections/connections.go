@@ -15,7 +15,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/rohansen856/connrelay/core/prwcore/token"
+	"github.com/rohansen856/connrelay/core/connrelaycore/token"
 	"github.com/rohansen856/connrelay/services/control/internal/auth"
 	"github.com/rohansen856/connrelay/services/control/internal/httpx"
 	"github.com/rohansen856/connrelay/services/control/internal/store"

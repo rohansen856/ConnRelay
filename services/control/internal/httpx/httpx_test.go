@@ -49,7 +49,7 @@ func TestDecode(t *testing.T) {
 
 func TestErrorEnvelopeHidesInternalErrors(t *testing.T) {
 	h := WithRequestID(Handler(func(http.ResponseWriter, *http.Request) error {
-		return errors.New("pq: password authentication failed for user prw")
+		return errors.New("pq: password authentication failed for user connrelay")
 	}))
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))

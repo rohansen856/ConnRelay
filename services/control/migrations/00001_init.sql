@@ -1,4 +1,4 @@
--- Initial PRW schema. Integrity rules enforced by the database:
+-- Initial ConnRelay schema. Integrity rules enforced by the database:
 --   * every device reference is account-scoped through composite foreign keys
 --     on (account_id, id[, kind]), so a row cannot point at another account's
 --     device or at a device of the wrong kind;
@@ -163,7 +163,7 @@ CREATE TABLE terminal_sessions (
   host_kind                  TEXT GENERATED ALWAYS AS ('host') STORED,
   created_by_phone_device_id UUID,
   phone_kind                 TEXT GENERATED ALWAYS AS ('phone') STORED,
-  host_session_handle        TEXT NOT NULL CHECK (length(host_session_handle) <= 128),  -- e.g. prw-<uuid>
+  host_session_handle        TEXT NOT NULL CHECK (length(host_session_handle) <= 128),  -- e.g. connrelay-<uuid>
   client_request_id          UUID NOT NULL,
   backend                    TEXT NOT NULL CHECK (backend IN ('tmux','pty')),
   persistent                 BOOLEAN NOT NULL,

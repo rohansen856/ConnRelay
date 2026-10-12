@@ -21,7 +21,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/rohansen856/connrelay/core/prwcore/attest"
+	"github.com/rohansen856/connrelay/core/connrelaycore/attest"
 	"github.com/rohansen856/connrelay/services/control/internal/auth"
 	"github.com/rohansen856/connrelay/services/control/internal/httpx"
 	"github.com/rohansen856/connrelay/services/control/internal/store"
@@ -183,7 +183,7 @@ func (s *Service) create(ctx context.Context, req createReq) (map[string]any, er
 	q := url.Values{"v": {"1"}, "ref": {ref}, "fp": {fp}, "api": {s.APIURL}}
 	return map[string]any{
 		"challenge_id": id, "pairing_ref": ref, "display_code": code, "expires_at": exp.UTC().Format(time.RFC3339),
-		"wait_token": wait, "qr_payload": "prw://pair?" + q.Encode(),
+		"wait_token": wait, "qr_payload": "connrelay://pair?" + q.Encode(),
 	}, nil
 }
 

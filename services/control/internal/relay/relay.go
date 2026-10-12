@@ -15,7 +15,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
-	"github.com/rohansen856/connrelay/core/prwcore/token"
+	"github.com/rohansen856/connrelay/core/connrelaycore/token"
 	"golang.org/x/time/rate"
 )
 

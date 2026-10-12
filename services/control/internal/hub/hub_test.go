@@ -11,8 +11,8 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
-	"github.com/rohansen856/connrelay/core/prwcore/attest"
-	"github.com/rohansen856/connrelay/core/prwcore/token"
+	"github.com/rohansen856/connrelay/core/connrelaycore/attest"
+	"github.com/rohansen856/connrelay/core/connrelaycore/token"
 	"github.com/rohansen856/connrelay/services/control/internal/apitest"
 	"github.com/rohansen856/connrelay/services/control/internal/connections"
 	"github.com/rohansen856/connrelay/services/control/internal/dbtest"

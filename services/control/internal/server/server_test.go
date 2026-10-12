@@ -97,7 +97,7 @@ func TestAccessLog(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	ws, _, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(ts.URL, "http")+"/v1/agent/control",
-		&websocket.DialOptions{Subprotocols: []string{"prw.v1"}})
+		&websocket.DialOptions{Subprotocols: []string{"connrelay.v1"}})
 	if err != nil {
 		t.Fatalf("websocket upgrade through access log: %v", err)
 	}

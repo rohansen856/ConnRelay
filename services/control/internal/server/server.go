@@ -15,7 +15,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/rohansen856/connrelay/core/prwcore/token"
+	"github.com/rohansen856/connrelay/core/connrelaycore/token"
 	"github.com/rohansen856/connrelay/services/control/internal/auth"
 	"github.com/rohansen856/connrelay/services/control/internal/config"
 	"github.com/rohansen856/connrelay/services/control/internal/connections"
@@ -79,7 +79,7 @@ func New(cfg *config.Config, pool *pgxpool.Pool, verifier auth.IDTokenVerifier, 
 	mux.HandleFunc("GET /v1/signaling", h.ServePhone)
 	mux.Handle("GET /v1/relay", rel)
 	mux.HandleFunc("GET /v1/meta/compat", func(w http.ResponseWriter, _ *http.Request) {
-		httpx.WriteJSON(w, http.StatusOK, map[string]any{"protocol": map[string]int{"min": 1, "max": 1}, "server": "prw-control"})
+		httpx.WriteJSON(w, http.StatusOK, map[string]any{"protocol": map[string]int{"min": 1, "max": 1}, "server": "connrelay-control"})
 	})
 	mux.HandleFunc("GET /health/live", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("ok")) })
 	mux.HandleFunc("GET /health/ready", func(w http.ResponseWriter, r *http.Request) {

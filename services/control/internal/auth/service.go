@@ -18,7 +18,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/rohansen856/connrelay/core/prwcore/attest"
+	"github.com/rohansen856/connrelay/core/connrelaycore/attest"
 	"github.com/rohansen856/connrelay/services/control/internal/google"
 	"github.com/rohansen856/connrelay/services/control/internal/httpx"
 	"github.com/rohansen856/connrelay/services/control/internal/nonce"
@@ -56,7 +56,7 @@ type Service struct {
 	Tokens *tokens.Manager
 	Now    func() time.Time
 	// Log, when set, records denied subjects so the operator can add their
-	// own account to PRW_ALLOWED_SUBJECTS (the audit row keeps only a hash).
+	// own account to CONNRELAY_ALLOWED_SUBJECTS (the audit row keeps only a hash).
 	Log *slog.Logger
 }
 
@@ -186,7 +186,7 @@ func (s *Service) Exchange(ctx context.Context, req ExchangeRequest, requestID, 
 	id, err := s.Google.Verify(ctx, req.IDToken, req.OIDCNonce)
 	if errors.Is(err, google.ErrNotAllowed) {
 		if s.Log != nil {
-			s.Log.Warn("sign-in denied: subject not in PRW_ALLOWED_SUBJECTS; add it if this is you",
+			s.Log.Warn("sign-in denied: subject not in CONNRELAY_ALLOWED_SUBJECTS; add it if this is you",
 				"subject", "google:"+id.Subject, "request_id", requestID)
 		}
 		_ = store.WriteAudit(ctx, s.Store.Pool, store.Audit{ActorKind: "anonymous", EventType: "login_denied",

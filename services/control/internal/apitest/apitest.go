@@ -19,8 +19,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/rohansen856/connrelay/core/prwcore/attest"
-	"github.com/rohansen856/connrelay/core/prwcore/token"
+	"github.com/rohansen856/connrelay/core/connrelaycore/attest"
+	"github.com/rohansen856/connrelay/core/connrelaycore/token"
 	"github.com/rohansen856/connrelay/services/control/internal/auth"
 	"github.com/rohansen856/connrelay/services/control/internal/dbtest"
 	"github.com/rohansen856/connrelay/services/control/internal/google"

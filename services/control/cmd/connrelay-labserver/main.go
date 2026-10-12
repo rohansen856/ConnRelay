@@ -1,4 +1,4 @@
-// Command prw-labserver is a network-lab stand-in for the control plane. It
+// Command connrelay-labserver is a network-lab stand-in for the control plane. It
 // issues connection-attempt bundles (ticket, relay tokens, TURN credentials,
 // attestation nonce), relays signaling between the phone and host of an
 // attempt, and serves the production /v1/relay splicer over TLS.
@@ -29,7 +29,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
-	"github.com/rohansen856/connrelay/core/prwcore/token"
+	"github.com/rohansen856/connrelay/core/connrelaycore/token"
 	"github.com/rohansen856/connrelay/services/control/internal/relay"
 	"github.com/rohansen856/connrelay/services/control/internal/turncred"
 )
@@ -212,7 +212,7 @@ func selfSigned(hosts []string) (tls.Certificate, error) {
 	}
 	tmpl := &x509.Certificate{
 		SerialNumber: big.NewInt(time.Now().UnixNano()),
-		Subject:      pkix.Name{CommonName: "prw-lab"},
+		Subject:      pkix.Name{CommonName: "connrelay-lab"},
 		NotBefore:    time.Now().Add(-time.Hour),
 		NotAfter:     time.Now().Add(24 * time.Hour),
 		DNSNames:     hosts,
@@ -237,9 +237,9 @@ func main() {
 	flag.Parse()
 	log := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 
-	secret := os.Getenv("PRW_TURN_SHARED_SECRET")
+	secret := os.Getenv("CONNRELAY_TURN_SHARED_SECRET")
 	if secret == "" {
-		log.Error("PRW_TURN_SHARED_SECRET is required")
+		log.Error("CONNRELAY_TURN_SHARED_SECRET is required")
 		os.Exit(2)
 	}
 	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
@@ -268,7 +268,7 @@ func main() {
 		})
 	})
 	srv := &http.Server{Addr: *addr, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
-	log.Info("prw-labserver listening", "addr", *addr, "public_url", l.publicURL, "turn_urls", l.turnURLs)
+	log.Info("connrelay-labserver listening", "addr", *addr, "public_url", l.publicURL, "turn_urls", l.turnURLs)
 	var err error
 	if *plain {
 		err = srv.ListenAndServe()

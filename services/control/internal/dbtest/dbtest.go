@@ -1,9 +1,9 @@
 // Package dbtest provides migrated, isolated PostgreSQL databases for tests.
 //
-// Set PRW_TEST_DATABASE_URL to an admin URL of an existing server (CI service
+// Set CONNRELAY_TEST_DATABASE_URL to an admin URL of an existing server (CI service
 // container). Otherwise a postgres:16-alpine container is started with Docker
 // once per test binary and removed when it exits. Tests skip when neither is
-// available, unless PRW_REQUIRE_DB=1 (CI), which makes them fail.
+// available, unless CONNRELAY_REQUIRE_DB=1 (CI), which makes them fail.
 package dbtest
 
 import (
@@ -23,7 +23,7 @@ import (
 	"github.com/rohansen856/connrelay/services/control/internal/db"
 )
 
-const template = "prw_template"
+const template = "connrelay_template"
 
 var (
 	once     sync.Once
@@ -34,7 +34,7 @@ var (
 func setup() {
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
-	adminURL = os.Getenv("PRW_TEST_DATABASE_URL")
+	adminURL = os.Getenv("CONNRELAY_TEST_DATABASE_URL")
 	if adminURL == "" {
 		// Docker occasionally leaves a container in "created"; retry once.
 		for try := 0; try < 2; try++ {
@@ -71,8 +71,8 @@ func startContainer(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("docker not available: %w", err)
 	}
 	out, err := exec.CommandContext(ctx, "docker", "run", "-d", "--rm", "-P",
-		"-e", "POSTGRES_PASSWORD=test", "-e", "POSTGRES_USER=prw",
-		"--label", "prw-dbtest=1", "postgres:16-alpine").Output()
+		"-e", "POSTGRES_PASSWORD=test", "-e", "POSTGRES_USER=connrelay",
+		"--label", "connrelay-dbtest=1", "postgres:16-alpine").Output()
 	if err != nil {
 		return "", fmt.Errorf("start postgres: %w", err)
 	}
@@ -91,7 +91,7 @@ func startContainer(ctx context.Context) (string, error) {
 	}
 	hostPort := strings.TrimSpace(strings.Split(string(port), "\n")[0])
 	hostPort = strings.Replace(hostPort, "0.0.0.0", "127.0.0.1", 1)
-	return "postgres://prw:test@" + hostPort + "/postgres?sslmode=disable", nil
+	return "postgres://connrelay:test@" + hostPort + "/postgres?sslmode=disable", nil
 }
 
 var containers struct {
@@ -133,9 +133,9 @@ func New(t testing.TB) *pgxpool.Pool {
 	t.Helper()
 	once.Do(setup)
 	if setupErr != nil {
-		// CI sets PRW_REQUIRE_DB=1 so a missing database fails loudly
+		// CI sets CONNRELAY_REQUIRE_DB=1 so a missing database fails loudly
 		// instead of silently skipping every database test.
-		if os.Getenv("PRW_REQUIRE_DB") == "1" {
+		if os.Getenv("CONNRELAY_REQUIRE_DB") == "1" {
 			t.Fatalf("no test database: %v", setupErr)
 		}
 		t.Skipf("no test database: %v", setupErr)

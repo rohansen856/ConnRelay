@@ -1,8 +1,8 @@
-// Command prw-control runs the Private Remote Workspace control plane.
+// Command connrelay-control runs the ConnRelay control plane.
 //
-//	prw-control serve          run the server (default)
-//	prw-control check-config   validate configuration and exit
-//	prw-control keygen DIR     write signing keys and secrets for a new install
+//	connrelay-control serve          run the server (default)
+//	connrelay-control check-config   validate configuration and exit
+//	connrelay-control keygen DIR     write signing keys and secrets for a new install
 package main
 
 import (
@@ -41,7 +41,7 @@ func main() {
 		}
 	case "keygen":
 		if len(os.Args) != 3 {
-			err = errors.New("usage: prw-control keygen DIR")
+			err = errors.New("usage: connrelay-control keygen DIR")
 		} else {
 			err = keygen(os.Args[2])
 		}
@@ -49,7 +49,7 @@ func main() {
 		err = fmt.Errorf("unknown command %q (serve, check-config, keygen)", cmd)
 	}
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "prw-control:", err)
+		fmt.Fprintln(os.Stderr, "connrelay-control:", err)
 		os.Exit(1)
 	}
 }
@@ -81,7 +81,7 @@ func serve() error {
 	hs := &http.Server{Addr: cfg.ListenAddr, Handler: srv.Handler, ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 60 * time.Second}
 	errc := make(chan error, 1)
 	go func() { errc <- hs.ListenAndServe() }()
-	log.Info("prw-control listening", "addr", cfg.ListenAddr, "public_base_url", cfg.PublicBaseURL)
+	log.Info("connrelay-control listening", "addr", cfg.ListenAddr, "public_base_url", cfg.PublicBaseURL)
 	select {
 	case err := <-errc:
 		return err

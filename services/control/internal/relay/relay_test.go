@@ -19,11 +19,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rohansen856/connrelay/core/prwcore/frame"
-	"github.com/rohansen856/connrelay/core/prwcore/token"
-	"github.com/rohansen856/connrelay/core/prwcore/transport"
-	"github.com/rohansen856/connrelay/core/prwcore/transport/innertls"
-	"github.com/rohansen856/connrelay/core/prwcore/transport/wssrelay"
+	"github.com/rohansen856/connrelay/core/connrelaycore/frame"
+	"github.com/rohansen856/connrelay/core/connrelaycore/token"
+	"github.com/rohansen856/connrelay/core/connrelaycore/transport"
+	"github.com/rohansen856/connrelay/core/connrelaycore/transport/innertls"
+	"github.com/rohansen856/connrelay/core/connrelaycore/transport/wssrelay"
 )
 
 type env struct {

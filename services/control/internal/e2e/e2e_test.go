@@ -1,6 +1,6 @@
 // Package e2e runs the whole system: the assembled control plane on a real
-// PostgreSQL database, the real prw-agent binary (pairing, control socket,
-// tmux terminals) and a phone built on prwcore/client. Nothing is mocked
+// PostgreSQL database, the real connrelay-agent binary (pairing, control socket,
+// tmux terminals) and a phone built on connrelaycore/client. Nothing is mocked
 // except Google, whose ID tokens come from a local test issuer.
 package e2e
 
@@ -26,11 +26,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rohansen856/connrelay/core/prwcore/attest"
-	"github.com/rohansen856/connrelay/core/prwcore/client"
-	"github.com/rohansen856/connrelay/core/prwcore/mobile"
-	"github.com/rohansen856/connrelay/core/prwcore/termclient"
-	"github.com/rohansen856/connrelay/core/prwcore/transport"
+	"github.com/rohansen856/connrelay/core/connrelaycore/attest"
+	"github.com/rohansen856/connrelay/core/connrelaycore/client"
+	"github.com/rohansen856/connrelay/core/connrelaycore/mobile"
+	"github.com/rohansen856/connrelay/core/connrelaycore/termclient"
+	"github.com/rohansen856/connrelay/core/connrelaycore/transport"
 	"github.com/rohansen856/connrelay/services/control/internal/config"
 	"github.com/rohansen856/connrelay/services/control/internal/dbtest"
 	"github.com/rohansen856/connrelay/services/control/internal/google"
@@ -48,7 +48,7 @@ type world struct {
 	t     *testing.T
 	url   string
 	iss   *googletest.Issuer
-	agent string // path to the built prw-agent
+	agent string // path to the built connrelay-agent
 	dir   string
 }
 
@@ -77,8 +77,8 @@ func newWorld(t *testing.T) *world {
 	ts.Config.Handler = srv.Handler
 
 	dir := t.TempDir()
-	bin := filepath.Join(dir, "prw-agent")
-	build := exec.Command("go", "build", "-o", bin, "./agents/host/cmd/prw-agent")
+	bin := filepath.Join(dir, "connrelay-agent")
+	build := exec.Command("go", "build", "-o", bin, "./agents/host/cmd/connrelay-agent")
 	build.Dir = filepath.Join("..", "..", "..", "..")
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build agent: %v\n%s", err, out)
@@ -145,10 +145,10 @@ func (p *phone) cfg(mode string) client.Config {
 func (w *world) env() []string {
 	run := filepath.Join(w.dir, "run")
 	_ = os.MkdirAll(run, 0o700)
-	return append(os.Environ(), "PRW_AGENT_CONFIG_DIR="+filepath.Join(w.dir, "cfg"), "XDG_RUNTIME_DIR="+run, "SHELL=/bin/sh", "HOME="+w.dir)
+	return append(os.Environ(), "CONNRELAY_AGENT_CONFIG_DIR="+filepath.Join(w.dir, "cfg"), "XDG_RUNTIME_DIR="+run, "SHELL=/bin/sh", "HOME="+w.dir)
 }
 
-// pair runs `prw-agent pair`, approves it from the phone after checking the
+// pair runs `connrelay-agent pair`, approves it from the phone after checking the
 // QR fingerprint, and returns the host's device ID and pinned fingerprint.
 func (w *world) pair(p *phone) (hostID, fp string) {
 	w.t.Helper()
@@ -204,7 +204,7 @@ func (w *world) startAgent() *exec.Cmd {
 	w.t.Cleanup(func() {
 		_ = cmd.Process.Kill()
 		_, _ = cmd.Process.Wait()
-		_ = exec.Command("tmux", "-S", filepath.Join(w.dir, "run", "prw", "tmux.sock"), "kill-server").Run()
+		_ = exec.Command("tmux", "-S", filepath.Join(w.dir, "run", "connrelay", "tmux.sock"), "kill-server").Run()
 		if w.t.Failed() {
 			w.t.Logf("agent log:\n%s", logs.String())
 		}
@@ -232,7 +232,7 @@ func (w *world) waitOnline(p *phone, host string) {
 	w.t.Fatal("agent never came online")
 }
 
-// ---- terminal (phone side, via prwcore/termclient) ----
+// ---- terminal (phone side, via connrelaycore/termclient) ----
 
 type screen struct {
 	t      *testing.T
@@ -369,8 +369,8 @@ func TestFullSystem(t *testing.T) {
 		t.Fatalf("after revoke: %v", err)
 	}
 	// The shell itself keeps running (revocation detaches, never kills).
-	out, err := exec.Command("tmux", "-S", filepath.Join(w.dir, "run", "prw", "tmux.sock"), "list-sessions").CombinedOutput()
-	if err != nil || !strings.Contains(string(out), "prw-"+session) {
+	out, err := exec.Command("tmux", "-S", filepath.Join(w.dir, "run", "connrelay", "tmux.sock"), "list-sessions").CombinedOutput()
+	if err != nil || !strings.Contains(string(out), "connrelay-"+session) {
 		t.Fatalf("session gone after revocation: %v %s", err, out)
 	}
 }

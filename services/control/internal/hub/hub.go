@@ -17,8 +17,8 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/google/uuid"
-	"github.com/rohansen856/connrelay/core/prwcore/attest"
-	"github.com/rohansen856/connrelay/core/prwcore/token"
+	"github.com/rohansen856/connrelay/core/connrelaycore/attest"
+	"github.com/rohansen856/connrelay/core/connrelaycore/token"
 	"github.com/rohansen856/connrelay/services/control/internal/auth"
 	"github.com/rohansen856/connrelay/services/control/internal/nonce"
 	"github.com/rohansen856/connrelay/services/control/internal/store"
@@ -42,7 +42,7 @@ const (
 	CloseRevoked     = websocket.StatusCode(4403)
 	CloseSuperseded  = websocket.StatusCode(4400)
 	CloseRateLimited = websocket.StatusCode(4429)
-	SubProtocol      = "prw.v1"
+	SubProtocol      = "connrelay.v1"
 )
 
 // agentAllowlist is every message type the server may send to an agent.

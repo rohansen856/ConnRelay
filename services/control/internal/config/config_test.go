@@ -27,15 +27,15 @@ func validEnv(t *testing.T) map[string]string {
 	secret := make([]byte, 32)
 	_, _ = rand.Read(secret)
 	return map[string]string{
-		"PRW_PUBLIC_BASE_URL":         "https://api.example.invalid",
-		"PRW_DATABASE_URL":            "postgres://x@localhost/prw",
-		"PRW_GOOGLE_CLIENT_IDS":       "a.apps.googleusercontent.com, b.apps.googleusercontent.com",
-		"PRW_ALLOWED_SUBJECTS":        "google:1234",
-		"PRW_ACCESS_SIGNING_KEY_FILE": key("access.pem"),
-		"PRW_TICKET_SIGNING_KEY_FILE": key("ticket.pem"),
-		"PRW_PAIRING_HMAC_KEY_FILE":   write(t, dir, "pepper", secret, 0o600),
-		"PRW_TURN_SHARED_SECRET_FILE": write(t, dir, "turn", secret, 0o600),
-		"PRW_TURN_URLS":               "turn:turn.example.invalid:3478?transport=udp,turns:turn.example.invalid:443?transport=tcp",
+		"CONNRELAY_PUBLIC_BASE_URL":         "https://api.example.invalid",
+		"CONNRELAY_DATABASE_URL":            "postgres://x@localhost/connrelay",
+		"CONNRELAY_GOOGLE_CLIENT_IDS":       "a.apps.googleusercontent.com, b.apps.googleusercontent.com",
+		"CONNRELAY_ALLOWED_SUBJECTS":        "google:1234",
+		"CONNRELAY_ACCESS_SIGNING_KEY_FILE": key("access.pem"),
+		"CONNRELAY_TICKET_SIGNING_KEY_FILE": key("ticket.pem"),
+		"CONNRELAY_PAIRING_HMAC_KEY_FILE":   write(t, dir, "pepper", secret, 0o600),
+		"CONNRELAY_TURN_SHARED_SECRET_FILE": write(t, dir, "turn", secret, 0o600),
+		"CONNRELAY_TURN_URLS":               "turn:turn.example.invalid:3478?transport=udp,turns:turn.example.invalid:443?transport=tcp",
 	}
 }
 
@@ -53,18 +53,18 @@ func TestValid(t *testing.T) {
 
 func TestRejects(t *testing.T) {
 	cases := map[string]func(m map[string]string){
-		"empty allowlist":    func(m map[string]string) { m["PRW_ALLOWED_SUBJECTS"] = "" },
-		"bare subject":       func(m map[string]string) { m["PRW_ALLOWED_SUBJECTS"] = "1234" },
-		"http base url":      func(m map[string]string) { m["PRW_PUBLIC_BASE_URL"] = "http://api.example.invalid" },
-		"base url with path": func(m map[string]string) { m["PRW_PUBLIC_BASE_URL"] = "https://x.invalid/api" },
-		"no client ids":      func(m map[string]string) { m["PRW_GOOGLE_CLIENT_IDS"] = "" },
-		"bad turn url":       func(m map[string]string) { m["PRW_TURN_URLS"] = "http://x" },
-		"same keys":          func(m map[string]string) { m["PRW_TICKET_SIGNING_KEY_FILE"] = m["PRW_ACCESS_SIGNING_KEY_FILE"] },
+		"empty allowlist":    func(m map[string]string) { m["CONNRELAY_ALLOWED_SUBJECTS"] = "" },
+		"bare subject":       func(m map[string]string) { m["CONNRELAY_ALLOWED_SUBJECTS"] = "1234" },
+		"http base url":      func(m map[string]string) { m["CONNRELAY_PUBLIC_BASE_URL"] = "http://api.example.invalid" },
+		"base url with path": func(m map[string]string) { m["CONNRELAY_PUBLIC_BASE_URL"] = "https://x.invalid/api" },
+		"no client ids":      func(m map[string]string) { m["CONNRELAY_GOOGLE_CLIENT_IDS"] = "" },
+		"bad turn url":       func(m map[string]string) { m["CONNRELAY_TURN_URLS"] = "http://x" },
+		"same keys":          func(m map[string]string) { m["CONNRELAY_TICKET_SIGNING_KEY_FILE"] = m["CONNRELAY_ACCESS_SIGNING_KEY_FILE"] },
 		"world-readable secret": func(m map[string]string) {
-			_ = os.Chmod(m["PRW_TURN_SHARED_SECRET_FILE"], 0o644)
+			_ = os.Chmod(m["CONNRELAY_TURN_SHARED_SECRET_FILE"], 0o644)
 		},
 		"short pepper": func(m map[string]string) {
-			_ = os.WriteFile(m["PRW_PAIRING_HMAC_KEY_FILE"], []byte("short"), 0o600)
+			_ = os.WriteFile(m["CONNRELAY_PAIRING_HMAC_KEY_FILE"], []byte("short"), 0o600)
 		},
 	}
 	for name, mut := range cases {

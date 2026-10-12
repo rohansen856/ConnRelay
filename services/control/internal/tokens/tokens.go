@@ -11,13 +11,13 @@ import (
 	"errors"
 	"time"
 
-	"github.com/rohansen856/connrelay/core/prwcore/token"
+	"github.com/rohansen856/connrelay/core/connrelaycore/token"
 )
 
 // Token type and audience for access tokens.
 const (
-	TypeAccess = "prw-access+jwt"
-	Audience   = "prw-api"
+	TypeAccess = "connrelay-access+jwt"
+	Audience   = "connrelay-api"
 	AccessTTL  = 10 * time.Minute
 )
 

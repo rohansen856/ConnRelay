@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rohansen856/connrelay/core/prwcore/attest"
+	"github.com/rohansen856/connrelay/core/connrelaycore/attest"
 	"github.com/rohansen856/connrelay/services/control/internal/apitest"
 	"github.com/rohansen856/connrelay/services/control/internal/dbtest"
 	"github.com/rohansen856/connrelay/services/control/internal/inventory"
@@ -40,7 +40,7 @@ func setup(t *testing.T) *env {
 	return e
 }
 
-// host simulates prw-agent pair.
+// host simulates connrelay-agent pair.
 type host struct {
 	e    *env
 	key  *attest.SoftwareSigner
