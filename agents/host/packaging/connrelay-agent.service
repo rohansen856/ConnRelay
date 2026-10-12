@@ -1,20 +1,20 @@
-# systemd --user unit for the PRW host agent.
+# systemd --user unit for the ConnRelay host agent.
 #
-#   install -Dm644 prw-agent.service ~/.config/systemd/user/prw-agent.service
-#   systemctl --user daemon-reload && systemctl --user enable --now prw-agent
+#   install -Dm644 connrelay-agent.service ~/.config/systemd/user/connrelay-agent.service
+#   systemctl --user daemon-reload && systemctl --user enable --now connrelay-agent
 #   loginctl enable-linger "$USER"   # keep running while logged out
 #
 # KillMode=process is required: tmux sessions are children of the agent and
 # must survive agent restarts and upgrades (verified by tests/spikes/s4).
 [Unit]
-Description=Private Remote Workspace host agent
+Description=ConnRelay host agent
 Documentation=https://github.com/rohansen856/connrelay
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=exec
-ExecStart=%h/.local/bin/prw-agent run
+ExecStart=%h/.local/bin/connrelay-agent run
 Restart=always
 RestartSec=3
 KillMode=process

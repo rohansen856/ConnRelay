@@ -6,10 +6,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rohansen856/connrelay/core/prwcore/attest"
-	"github.com/rohansen856/connrelay/core/prwcore/peer"
-	"github.com/rohansen856/connrelay/core/prwcore/transport"
-	"github.com/rohansen856/connrelay/core/prwcore/transport/webrtc"
+	"github.com/rohansen856/connrelay/core/connrelaycore/attest"
+	"github.com/rohansen856/connrelay/core/connrelaycore/peer"
+	"github.com/rohansen856/connrelay/core/connrelaycore/transport"
+	"github.com/rohansen856/connrelay/core/connrelaycore/transport/webrtc"
 )
 
 type identities struct {

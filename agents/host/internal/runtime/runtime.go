@@ -20,15 +20,15 @@ import (
 	"github.com/rohansen856/connrelay/agents/host/internal/agentcfg"
 	"github.com/rohansen856/connrelay/agents/host/internal/lease"
 	"github.com/rohansen856/connrelay/agents/host/internal/termserver"
-	"github.com/rohansen856/connrelay/core/prwcore/attest"
-	"github.com/rohansen856/connrelay/core/prwcore/connmgr"
-	"github.com/rohansen856/connrelay/core/prwcore/control"
-	"github.com/rohansen856/connrelay/core/prwcore/peer"
-	"github.com/rohansen856/connrelay/core/prwcore/token"
-	"github.com/rohansen856/connrelay/core/prwcore/transport"
-	"github.com/rohansen856/connrelay/core/prwcore/transport/innertls"
-	"github.com/rohansen856/connrelay/core/prwcore/transport/webrtc"
-	"github.com/rohansen856/connrelay/core/prwcore/transport/wssrelay"
+	"github.com/rohansen856/connrelay/core/connrelaycore/attest"
+	"github.com/rohansen856/connrelay/core/connrelaycore/connmgr"
+	"github.com/rohansen856/connrelay/core/connrelaycore/control"
+	"github.com/rohansen856/connrelay/core/connrelaycore/peer"
+	"github.com/rohansen856/connrelay/core/connrelaycore/token"
+	"github.com/rohansen856/connrelay/core/connrelaycore/transport"
+	"github.com/rohansen856/connrelay/core/connrelaycore/transport/innertls"
+	"github.com/rohansen856/connrelay/core/connrelaycore/transport/webrtc"
+	"github.com/rohansen856/connrelay/core/connrelaycore/transport/wssrelay"
 )
 
 // Version is the agent version reported to the control plane.
@@ -157,7 +157,7 @@ func (a *Agent) send(ctx context.Context, m any) error {
 
 // session runs one control-socket connection.
 func (a *Agent) session(ctx context.Context) error {
-	ws, _, err := websocket.Dial(ctx, a.State.ControlWS, &websocket.DialOptions{Subprotocols: []string{"prw.v1"}, HTTPClient: a.HTTP})
+	ws, _, err := websocket.Dial(ctx, a.State.ControlWS, &websocket.DialOptions{Subprotocols: []string{"connrelay.v1"}, HTTPClient: a.HTTP})
 	if err != nil {
 		return err
 	}
@@ -545,7 +545,7 @@ func (a *Agent) handleAttempt(ctx context.Context, raw json.RawMessage, sigs cha
 		Handshake: func(ctx context.Context, c transport.Conn) error {
 			_, err := peer.Handshake(ctx, c, peer.Params{
 				Role: peer.RoleHost, Self: a.State.DeviceID, Peer: in.Phone, Attempt: in.AttemptID, Nonce: t.Nonce,
-				Cap: t.Cap, Signer: a.Key, PeerKey: ph.Key, Impl: "prw-agent/" + Version,
+				Cap: t.Cap, Signer: a.Key, PeerKey: ph.Key, Impl: "connrelay-agent/" + Version,
 				CheckTicket: func(presented string) ([]string, error) {
 					if presented != in.Ticket {
 						return nil, errors.New("ticket mismatch")

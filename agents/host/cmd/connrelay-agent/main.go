@@ -1,10 +1,10 @@
-// Command prw-agent is the Private Remote Workspace host agent.
+// Command connrelay-agent is the ConnRelay host agent.
 //
-//	prw-agent pair --server https://api.example.invalid [--name NAME]
-//	prw-agent run
-//	prw-agent status
-//	prw-agent unpair --local
-//	prw-agent version
+//	connrelay-agent pair --server https://api.example.invalid [--name NAME]
+//	connrelay-agent run
+//	connrelay-agent status
+//	connrelay-agent unpair --local
+//	connrelay-agent version
 //
 // It runs as the logged-in user (never root), normally as a systemd --user
 // service with KillMode=process so tmux sessions survive agent restarts.
@@ -34,7 +34,7 @@ import (
 	"github.com/rohansen856/connrelay/agents/host/internal/runtime"
 	"github.com/rohansen856/connrelay/agents/host/internal/termserver"
 	"github.com/rohansen856/connrelay/agents/host/internal/tmux"
-	"github.com/rohansen856/connrelay/core/prwcore/attest"
+	"github.com/rohansen856/connrelay/core/connrelaycore/attest"
 )
 
 func main() {
@@ -52,22 +52,22 @@ func main() {
 	case "unpair":
 		err = unpair(os.Args[2:])
 	case "version":
-		fmt.Println("prw-agent", runtime.Version)
+		fmt.Println("connrelay-agent", runtime.Version)
 	default:
 		usage()
 	}
 	if errors.Is(err, runtime.ErrRevoked) {
-		fmt.Fprintf(os.Stderr, "prw-agent: %v; run `prw-agent unpair --local` and pair again\n", err)
+		fmt.Fprintf(os.Stderr, "connrelay-agent: %v; run `connrelay-agent unpair --local` and pair again\n", err)
 		os.Exit(3)
 	}
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "prw-agent:", err)
+		fmt.Fprintln(os.Stderr, "connrelay-agent:", err)
 		os.Exit(1)
 	}
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: prw-agent pair --server URL [--name NAME] | run | status | unpair --local | version")
+	fmt.Fprintln(os.Stderr, "usage: connrelay-agent pair --server URL [--name NAME] | run | status | unpair --local | version")
 	os.Exit(2)
 }
 
@@ -99,7 +99,7 @@ func pair(args []string) error {
 	}
 	dir := agentcfg.Dir()
 	if _, err := agentcfg.LoadState(dir); err == nil {
-		return errors.New("already paired; run `prw-agent unpair --local` first")
+		return errors.New("already paired; run `connrelay-agent unpair --local` first")
 	}
 	key, _, err := agentcfg.LoadOrCreateKey(dir)
 	if err != nil {
@@ -139,7 +139,7 @@ func pair(args []string) error {
 	if err := agentcfg.SaveState(dir, st); err != nil {
 		return err
 	}
-	fmt.Printf("Paired as %q (device %s). Start the agent with `prw-agent run` or the systemd unit.\n", *name, st.DeviceID)
+	fmt.Printf("Paired as %q (device %s). Start the agent with `connrelay-agent run` or the systemd unit.\n", *name, st.DeviceID)
 	return nil
 }
 
@@ -153,9 +153,9 @@ func groupFP(fp string) string {
 
 func socketPath() string {
 	if d := os.Getenv("XDG_RUNTIME_DIR"); d != "" {
-		return filepath.Join(d, "prw", "tmux.sock")
+		return filepath.Join(d, "connrelay", "tmux.sock")
 	}
-	return filepath.Join(os.TempDir(), fmt.Sprintf("prw-%d", os.Getuid()), "tmux.sock")
+	return filepath.Join(os.TempDir(), fmt.Sprintf("connrelay-%d", os.Getuid()), "tmux.sock")
 }
 
 func run() error {
@@ -165,7 +165,7 @@ func run() error {
 	dir := agentcfg.Dir()
 	st, err := agentcfg.LoadState(dir)
 	if errors.Is(err, fs.ErrNotExist) {
-		return errors.New("not paired; run `prw-agent pair --server URL` first")
+		return errors.New("not paired; run `connrelay-agent pair --server URL` first")
 	}
 	if err != nil {
 		return err
@@ -220,7 +220,7 @@ func unpair(args []string) error {
 	local := fs.Bool("local", false, "forget the enrolment on this machine")
 	_ = fs.Parse(args)
 	if !*local {
-		return errors.New("revoke the computer from the app, then run `prw-agent unpair --local`")
+		return errors.New("revoke the computer from the app, then run `connrelay-agent unpair --local`")
 	}
 	return agentcfg.RemoveState(agentcfg.Dir())
 }

@@ -20,9 +20,9 @@ import (
 	"github.com/rohansen856/connrelay/agents/host/internal/ptyproc"
 	"github.com/rohansen856/connrelay/agents/host/internal/termstream"
 	"github.com/rohansen856/connrelay/agents/host/internal/tmux"
-	"github.com/rohansen856/connrelay/core/prwcore/control"
-	"github.com/rohansen856/connrelay/core/prwcore/frame"
-	"github.com/rohansen856/connrelay/core/prwcore/transport"
+	"github.com/rohansen856/connrelay/core/connrelaycore/control"
+	"github.com/rohansen856/connrelay/core/connrelaycore/frame"
+	"github.com/rohansen856/connrelay/core/connrelaycore/transport"
 )
 
 // Error codes sent in terminal.error.

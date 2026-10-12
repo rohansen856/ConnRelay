@@ -8,7 +8,7 @@ import (
 )
 
 func TestKeyLifecycle(t *testing.T) {
-	dir := filepath.Join(t.TempDir(), "prw")
+	dir := filepath.Join(t.TempDir(), "connrelay")
 	k1, created, err := LoadOrCreateKey(dir)
 	if err != nil || !created {
 		t.Fatal(err, created)

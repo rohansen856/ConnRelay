@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rohansen856/connrelay/core/prwcore/termclient"
-	"github.com/rohansen856/connrelay/core/prwcore/transport"
+	"github.com/rohansen856/connrelay/core/connrelaycore/termclient"
+	"github.com/rohansen856/connrelay/core/connrelaycore/transport"
 )
 
 type recorder struct {

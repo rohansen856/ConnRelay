@@ -23,8 +23,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/rohansen856/connrelay/core/prwcore/flow"
-	"github.com/rohansen856/connrelay/core/prwcore/frame"
+	"github.com/rohansen856/connrelay/core/connrelaycore/flow"
+	"github.com/rohansen856/connrelay/core/connrelaycore/frame"
 )
 
 // Proc is the terminal process side.

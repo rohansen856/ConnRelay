@@ -16,7 +16,7 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/rohansen856/connrelay/agents/host/internal/agentcfg"
-	"github.com/rohansen856/connrelay/core/prwcore/attest"
+	"github.com/rohansen856/connrelay/core/connrelaycore/attest"
 )
 
 // TestReconnectsWhenServerGoesSilent: a control socket that stops delivering
@@ -25,7 +25,7 @@ import (
 func TestReconnectsWhenServerGoesSilent(t *testing.T) {
 	var dials atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{Subprotocols: []string{"prw.v1"}})
+		ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{Subprotocols: []string{"connrelay.v1"}})
 		if err != nil {
 			return
 		}

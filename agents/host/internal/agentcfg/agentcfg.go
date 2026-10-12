@@ -1,5 +1,5 @@
 // Package agentcfg stores the host agent's identity key and enrolment state
-// under $XDG_CONFIG_HOME/prw (default ~/.config/prw). The private key never
+// under $XDG_CONFIG_HOME/connrelay (default ~/.config/connrelay). The private key never
 // leaves this machine; files are created 0600 in a 0700 directory.
 package agentcfg
 
@@ -15,7 +15,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/rohansen856/connrelay/core/prwcore/attest"
+	"github.com/rohansen856/connrelay/core/connrelaycore/attest"
 )
 
 // Files inside the config directory.
@@ -32,7 +32,7 @@ type JWK struct {
 	X   string `json:"x"`
 }
 
-// State is the enrolment state written by `prw-agent pair`.
+// State is the enrolment state written by `connrelay-agent pair`.
 type State struct {
 	Server    string `json:"server"` // https://api.example.invalid
 	ControlWS string `json:"control_ws_url"`
@@ -43,7 +43,7 @@ type State struct {
 
 // Dir returns the configuration directory.
 func Dir() string {
-	if d := os.Getenv("PRW_AGENT_CONFIG_DIR"); d != "" {
+	if d := os.Getenv("CONNRELAY_AGENT_CONFIG_DIR"); d != "" {
 		return d
 	}
 	base := os.Getenv("XDG_CONFIG_HOME")
@@ -51,7 +51,7 @@ func Dir() string {
 		home, _ := os.UserHomeDir()
 		base = filepath.Join(home, ".config")
 	}
-	return filepath.Join(base, "prw")
+	return filepath.Join(base, "connrelay")
 }
 
 // LoadOrCreateKey returns the host identity key, generating it on first use.

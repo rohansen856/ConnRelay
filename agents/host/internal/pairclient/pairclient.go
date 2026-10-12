@@ -17,7 +17,7 @@ import (
 	"time"
 
 	"github.com/rohansen856/connrelay/agents/host/internal/agentcfg"
-	"github.com/rohansen856/connrelay/core/prwcore/attest"
+	"github.com/rohansen856/connrelay/core/connrelaycore/attest"
 )
 
 // Challenge is what the user needs to approve pairing on the phone.

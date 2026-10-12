@@ -15,15 +15,15 @@ import (
 	"time"
 
 	"github.com/rohansen856/connrelay/agents/host/internal/tmux"
-	"github.com/rohansen856/connrelay/core/prwcore/control"
-	"github.com/rohansen856/connrelay/core/prwcore/flow"
-	"github.com/rohansen856/connrelay/core/prwcore/frame"
-	"github.com/rohansen856/connrelay/core/prwcore/transport"
+	"github.com/rohansen856/connrelay/core/connrelaycore/control"
+	"github.com/rohansen856/connrelay/core/connrelaycore/flow"
+	"github.com/rohansen856/connrelay/core/connrelaycore/frame"
+	"github.com/rohansen856/connrelay/core/connrelaycore/transport"
 )
 
 func newServer(t *testing.T, max int) *Server {
 	t.Helper()
-	dir, _ := os.MkdirTemp("", "prwt")
+	dir, _ := os.MkdirTemp("", "connrelayt")
 	ts, err := tmux.New(filepath.Join(dir, "t.sock"))
 	if errors.Is(err, tmux.ErrUnavailable) {
 		t.Skip("tmux not installed")

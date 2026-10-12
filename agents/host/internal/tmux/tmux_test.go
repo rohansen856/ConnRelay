@@ -16,7 +16,7 @@ import (
 
 func server(t *testing.T) *Server {
 	t.Helper()
-	dir, err := os.MkdirTemp("", "prwt")
+	dir, err := os.MkdirTemp("", "connrelayt")
 	if err != nil {
 		t.Fatal(err)
 	}

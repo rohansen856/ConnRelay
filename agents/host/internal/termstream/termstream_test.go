@@ -15,8 +15,8 @@ import (
 
 	"github.com/rohansen856/connrelay/agents/host/internal/ptyproc"
 	"github.com/rohansen856/connrelay/agents/host/internal/tmux"
-	"github.com/rohansen856/connrelay/core/prwcore/flow"
-	"github.com/rohansen856/connrelay/core/prwcore/frame"
+	"github.com/rohansen856/connrelay/core/connrelaycore/flow"
+	"github.com/rohansen856/connrelay/core/connrelaycore/frame"
 )
 
 // phone simulates a slow phone: it consumes frames, sleeps every few frames
@@ -149,7 +149,7 @@ func TestRawBurst50MiB(t *testing.T) {
 // phone consumes slowly. tmux re-renders rather than forwarding raw bytes, so
 // the check is that the final screen state arrives and memory stays bounded.
 func TestTmuxBurst(t *testing.T) {
-	dir, _ := os.MkdirTemp("", "prwt")
+	dir, _ := os.MkdirTemp("", "connrelayt")
 	defer os.RemoveAll(dir)
 	srv, err := tmux.New(filepath.Join(dir, "t.sock"))
 	if err != nil {

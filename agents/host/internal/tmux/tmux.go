@@ -1,6 +1,6 @@
-// Package tmux manages PRW sessions as tmux sessions on a private socket.
+// Package tmux manages ConnRelay sessions as tmux sessions on a private socket.
 //
-// Each PRW terminal session is one tmux session named "prw-<id>". A phone
+// Each ConnRelay terminal session is one tmux session named "connrelay-<id>". A phone
 // attaches by running "tmux attach" inside a PTY owned by the agent; tmux
 // redraws the full screen on every attach, so reconnects need no replay
 // buffer. The tmux server is a separate process: when the agent runs under
@@ -34,7 +34,7 @@ var idRE = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 // Server is a tmux server reachable through a private socket.
 type Server struct {
 	Bin    string // tmux binary
-	Socket string // e.g. $XDG_RUNTIME_DIR/prw/tmux.sock
+	Socket string // e.g. $XDG_RUNTIME_DIR/connrelay/tmux.sock
 }
 
 // New returns a server for socket, checking that tmux is usable.
@@ -66,11 +66,11 @@ func versionOK(v string) bool {
 	return maj > MinVersion[0] || (maj == MinVersion[0] && min >= MinVersion[1])
 }
 
-// Name returns the tmux session name for a PRW session ID.
-func Name(id string) string { return "prw-" + id }
+// Name returns the tmux session name for a ConnRelay session ID.
+func Name(id string) string { return "connrelay-" + id }
 
 func (s *Server) cmd(args ...string) *exec.Cmd {
-	// -f /dev/null: never load the user's tmux.conf into the PRW server, so
+	// -f /dev/null: never load the user's tmux.conf into the ConnRelay server, so
 	// behaviour is predictable. -S: private socket, not the user's default.
 	return exec.Command(s.Bin, append([]string{"-f", "/dev/null", "-S", s.Socket}, args...)...)
 }
@@ -122,7 +122,7 @@ type Info struct {
 	Attached int
 }
 
-// List returns PRW sessions on this server.
+// List returns ConnRelay sessions on this server.
 func (s *Server) List() ([]Info, error) {
 	out, err := s.run("list-sessions", "-F", "#{session_name}\t#{pane_pid}\t#{session_created}\t#{session_attached}")
 	if err != nil {
@@ -136,13 +136,13 @@ func (s *Server) List() ([]Info, error) {
 	sc := bufio.NewScanner(strings.NewReader(out))
 	for sc.Scan() {
 		f := strings.Split(sc.Text(), "\t")
-		if len(f) != 4 || !strings.HasPrefix(f[0], "prw-") {
+		if len(f) != 4 || !strings.HasPrefix(f[0], "connrelay-") {
 			continue
 		}
 		pid, _ := strconv.Atoi(f[1])
 		created, _ := strconv.ParseInt(f[2], 10, 64)
 		att, _ := strconv.Atoi(f[3])
-		res = append(res, Info{ID: strings.TrimPrefix(f[0], "prw-"), PanePID: pid, Created: created, Attached: att})
+		res = append(res, Info{ID: strings.TrimPrefix(f[0], "connrelay-"), PanePID: pid, Created: created, Attached: att})
 	}
 	return res, nil
 }

@@ -8,7 +8,7 @@ require (
 	github.com/coder/websocket v1.8.15
 	github.com/creack/pty v1.1.24
 	github.com/pion/webrtc/v4 v4.2.23
-	github.com/rohansen856/connrelay/core/prwcore v0.0.0-00010101000000-000000000000
+	github.com/rohansen856/connrelay/core/connrelaycore v0.0.0-00010101000000-000000000000
 	rsc.io/qr v0.2.0
 )
 
@@ -37,4 +37,4 @@ require (
 	golang.org/x/time v0.14.0 // indirect
 )
 
-replace github.com/rohansen856/connrelay/core/prwcore => ../../core/prwcore
+replace github.com/rohansen856/connrelay/core/connrelaycore => ../../core/connrelaycore
