@@ -1,7 +1,7 @@
 # Phase 1 Feasibility Spike Results
 
 > **Status:** Phase 1 complete for Linux hosts and Android phones. iOS and real-carrier field runs are still open (see [Open items](#open-items-before-gate-a)).
-> **Date:** 2026-06-23. **Toolchain:** Go 1.27.2 (module minimum 1.26), Flutter 3.41.6, Pion WebRTC v4.2.23, coturn 4.18.0, tmux 3.2a, xterm.dart 4.0.0.
+> **Toolchain:** Go 1.27.2 (module minimum 1.26), Flutter 3.41.6, Pion WebRTC v4.2.23, coturn 4.18.0, tmux 3.2a, xterm.dart 4.0.0.
 
 Every result below comes from a test or script in this repository. The commands to reproduce it are listed with each spike.
 

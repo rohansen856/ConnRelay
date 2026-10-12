@@ -142,7 +142,7 @@ Rating scale: ●●● good · ●● acceptable · ● poor.
 ## ADR-005: coturn ≥ 4.18 on a dedicated IP, ephemeral credentials, hardened
 
 - **Status:** Proposed. Not deployed yet; the network lab (`make netlab`) runs coturn 4.18.0.
-- **Context:** coturn is the standard TURN server. 2026 brought several serious coturn CVEs: pre-auth memory disclosure, a mobility-ticket allocation takeover, admin SQL injection, ACL bypasses and DTLS denial of service.
+- **Context:** coturn is the standard TURN server. Recent releases fixed several serious coturn CVEs: pre-auth memory disclosure, a mobility-ticket allocation takeover, admin SQL injection, ACL bypasses and DTLS denial of service.
 - **Decision:**
   - **Version:** pin coturn ≥ 4.18 by image digest.
   - **Credentials:** use TURN REST credentials (`use-auth-secret`). The username is `<expiry>:<attempt_id>` and the credential is `base64(HMAC-SHA1(secret, username))`, with a lifetime of 10 minutes or less.

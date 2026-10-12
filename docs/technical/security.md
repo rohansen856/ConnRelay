@@ -207,7 +207,7 @@ Enforcement:
 
 ## 10. coturn hardening
 
-coturn must be version **4.18 or later**, because 4.18 fixes the 2026 advisories: ACME-redirect memory disclosure, MOBILITY allocation takeover, admin-panel SQL injection, loopback ACL bypass, DTLS pre-cookie DoS, OAuth token overflow, and weak RNG.
+coturn must be version **4.18 or later**, because 4.18 fixes the recent advisories: ACME-redirect memory disclosure, MOBILITY allocation takeover, admin-panel SQL injection, loopback ACL bypass, DTLS pre-cookie DoS, OAuth token overflow, and weak RNG.
 
 Required configuration:
 - `use-auth-secret` with short-lived credentials;
