@@ -4,7 +4,7 @@ toolchain go1.27.2
 
 use (
 	./agents/host
-	./core/prwcore
+	./core/connrelaycore
 	./services/control
 	./tests
 )
